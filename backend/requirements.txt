@@ -1,0 +1,9 @@
+fastapi
+uvicorn[standard]
+SQLAlchemy
+PyMySQL
+pydantic
+python-dotenv
+Flask
+flask-cors
+requests
