@@ -18,6 +18,12 @@ async function request(path, options = {}) {
 }
 
 export const api = {
+  signup: (payload) =>
+    request("/api/auth/signup", { method: "POST", body: JSON.stringify(payload) }),
+  login: (payload) =>
+    request("/api/auth/login", { method: "POST", body: JSON.stringify(payload) }),
+  googleLogin: (payload) =>
+    request("/api/auth/oauth/google", { method: "POST", body: JSON.stringify(payload) }),
   categories: () => request("/api/categories"),
   users: () => request("/api/users"),
   user: (id) => request(`/api/users/${id}`),
@@ -42,6 +48,11 @@ export const api = {
       body: JSON.stringify({ quantity }),
     }),
   removeCart: (itemId) => request(`/api/cart/${itemId}`, { method: "DELETE" }),
+  wishlist: () => request("/api/wishlist"),
+  toggleWishlist: (productId) => request(`/api/wishlist/${productId}`, { method: "POST" }),
+  reviews: (productId) => request(`/api/products/${productId}/reviews`),
+  addReview: (payload) =>
+    request("/api/reviews", { method: "POST", body: JSON.stringify(payload) }),
   placeOrder: (payload) =>
     request("/api/orders", {
       method: "POST",

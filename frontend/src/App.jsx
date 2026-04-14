@@ -44,7 +44,7 @@ function Header({ query, setQuery, cartCount, page, go, activeRole, setActiveRol
       </label>
       <nav className="nav-actions">
         <button onClick={() => setActiveRole(activeRole === "buyer" ? "seller" : "buyer")}>Switch to {activeRole === "buyer" ? "Seller" : "Buyer"}</button>
-        <button onClick={() => go(activeRole === "buyer" ? "buyer" : "seller")}>{currentUser?.name || "User"}</button>
+        <button onClick={() => go(currentUser ? (activeRole === "buyer" ? "buyer" : "seller") : "auth")}>{currentUser?.name || "Login"}</button>
         <button onClick={() => go(activeRole === "buyer" ? "orders" : "seller")}>{activeRole === "buyer" ? "Orders" : "Seller Orders"}</button>
         <button onClick={() => go("cart")}>Cart ({cartCount})</button>
       </nav>
@@ -68,10 +68,13 @@ function UserPanel({ user }) {
   );
 }
 
-function ProductCard({ product, openProduct }) {
+function ProductCard({ product, openProduct, wished, toggleWishlist }) {
   const discount = Math.round(((product.mrp - product.price) / product.mrp) * 100);
   return (
     <article className="product-card" onClick={() => openProduct(product.id)}>
+      <button className={wished ? "wish-button wished" : "wish-button"} onClick={(event) => { event.stopPropagation(); toggleWishlist(product.id); }}>
+        {wished ? "Wishlisted" : "Wishlist"}
+      </button>
       <div className="product-image">
         <img src={product.images[0]?.url} alt={product.images[0]?.alt || product.title} />
       </div>
@@ -90,17 +93,20 @@ function ProductCard({ product, openProduct }) {
   );
 }
 
-function HomePage({ products, categories, selectedCategory, setSelectedCategory, openProduct, loading, buyer }) {
+function HomePage({ products, categories, filters, setFilters, openProduct, loading, buyer, wishlistIds, toggleWishlist }) {
+  const updateFilter = (key, value) => setFilters((current) => ({ ...current, [key]: value }));
   return (
     <main className="page-shell">
       <aside className="filters">
         <h2>Filters</h2>
-        <button className={selectedCategory === "all" ? "active" : ""} onClick={() => setSelectedCategory("all")}>All Categories</button>
+        <button className={filters.category === "all" ? "active" : ""} onClick={() => updateFilter("category", "all")}>All Categories</button>
         {categories.map((category) => (
-          <button key={category.id} className={selectedCategory === category.slug ? "active" : ""} onClick={() => setSelectedCategory(category.slug)}>
+          <button key={category.id} className={filters.category === category.slug ? "active" : ""} onClick={() => updateFilter("category", category.slug)}>
             {category.name}
           </button>
         ))}
+        <label>Max Price<input type="number" value={filters.max_price} onChange={(event) => updateFilter("max_price", event.target.value)} placeholder="50000" /></label>
+        <label>Min Rating<select value={filters.min_rating} onChange={(event) => updateFilter("min_rating", event.target.value)}><option value="">Any</option><option value="4">4+</option><option value="4.5">4.5+</option></select></label>
       </aside>
       <section className="listing">
         <UserPanel user={buyer} />
@@ -111,7 +117,7 @@ function HomePage({ products, categories, selectedCategory, setSelectedCategory,
         {loading ? (
           <div className="empty-state">Loading products...</div>
         ) : products.length ? (
-          <div className="grid">{products.map((product) => <ProductCard key={product.id} product={product} openProduct={openProduct} />)}</div>
+          <div className="grid">{products.map((product) => <ProductCard key={product.id} product={product} openProduct={openProduct} wished={wishlistIds.includes(product.id)} toggleWishlist={toggleWishlist} />)}</div>
         ) : (
           <div className="empty-state">No products matched your search.</div>
         )}
@@ -120,8 +126,9 @@ function HomePage({ products, categories, selectedCategory, setSelectedCategory,
   );
 }
 
-function ProductDetail({ product, onBack, addToCart, buyNow }) {
+function ProductDetail({ product, onBack, addToCart, buyNow, reviews, addReview }) {
   const [imageIndex, setImageIndex] = useState(0);
+  const [reviewForm, setReviewForm] = useState({ rating: 5, comment: "" });
   if (!product) return null;
   const image = product.images[imageIndex] || product.images[0];
   const discount = Math.round(((product.mrp - product.price) / product.mrp) * 100);
@@ -161,6 +168,27 @@ function ProductDetail({ product, onBack, addToCart, buyNow }) {
           <section className="specs">
             <h2>Specifications</h2>
             {product.specs.map((spec) => <div key={spec.id}><span>{spec.name}</span><strong>{spec.value}</strong></div>)}
+          </section>
+          <section className="reviews">
+            <h2>Reviews & Ratings</h2>
+            <form onSubmit={(event) => {
+              event.preventDefault();
+              addReview({ product_id: product.id, rating: Number(reviewForm.rating), comment: reviewForm.comment });
+              setReviewForm({ rating: 5, comment: "" });
+            }}>
+              <select value={reviewForm.rating} onChange={(event) => setReviewForm((current) => ({ ...current, rating: event.target.value }))}>
+                {[5, 4, 3, 2, 1].map((rating) => <option key={rating} value={rating}>{rating} star</option>)}
+              </select>
+              <input required value={reviewForm.comment} onChange={(event) => setReviewForm((current) => ({ ...current, comment: event.target.value }))} placeholder="Write a review" />
+              <button type="submit">Submit Review</button>
+            </form>
+            {reviews.map((review) => (
+              <article className="review-card" key={review.id}>
+                <strong>{review.rating} star by {review.user.name}</strong>
+                {review.verified_purchase && <span>Verified Purchase</span>}
+                <p>{review.comment}</p>
+              </article>
+            ))}
           </section>
         </div>
       </section>
@@ -242,8 +270,30 @@ function CheckoutPage({ cart, buyer, setCheckoutAddress, go }) {
   );
 }
 
+function AuthPage({ login, signup, googleLogin }) {
+  const [mode, setMode] = useState("login");
+  const [form, setForm] = useState({ name: "", email: "aarav.buyer@example.com", phone: "9876543210", password: "password123" });
+  const update = (key, value) => setForm((current) => ({ ...current, [key]: value }));
+  return (
+    <main className="dashboard-page">
+      <section className="checkout-form auth-box">
+        <h1>{mode === "login" ? "Login" : "Signup"}</h1>
+        <form onSubmit={(event) => { event.preventDefault(); mode === "login" ? login(form) : signup(form); }}>
+          {mode === "signup" && <input required placeholder="Full name" value={form.name} onChange={(event) => update("name", event.target.value)} />}
+          {mode === "signup" && <input required placeholder="Phone" value={form.phone} onChange={(event) => update("phone", event.target.value)} />}
+          <input required placeholder="Email" value={form.email} onChange={(event) => update("email", event.target.value)} />
+          <input required type="password" placeholder="Password" value={form.password} onChange={(event) => update("password", event.target.value)} />
+          <button type="submit">{mode === "login" ? "Login" : "Create Account"}</button>
+          <button type="button" className="secondary" onClick={() => googleLogin({ email: "google.user@example.com", name: "Google Demo User", provider: "google" })}>Continue with Google</button>
+          <button type="button" className="link-button" onClick={() => setMode(mode === "login" ? "signup" : "login")}>{mode === "login" ? "Create new account" : "Already have an account"}</button>
+        </form>
+      </section>
+    </main>
+  );
+}
+
 function PaymentPage({ cart, checkoutAddress, placeOrder, go }) {
-  const [payment, setPayment] = useState({ method: "UPI", payer_name: checkoutAddress?.customer_name || "", upi_id: "", card_last4: "" });
+  const [payment, setPayment] = useState({ method: "RAZORPAY", payer_name: checkoutAddress?.customer_name || "", upi_id: "", card_last4: "" });
   const update = (key, value) => setPayment((current) => ({ ...current, [key]: value }));
   const actionLabel = payment.method === "COD" ? "Place Order" : `Pay ${money(cart.summary.total)} and Place Order`;
 
@@ -254,17 +304,20 @@ function PaymentPage({ cart, checkoutAddress, placeOrder, go }) {
         <form onSubmit={(event) => {
           event.preventDefault();
           const payload = { method: payment.method, payer_name: payment.payer_name };
-          if (payment.method === "UPI") payload.upi_id = payment.upi_id;
+          if (payment.method === "UPI" || payment.method === "RAZORPAY") payload.upi_id = payment.upi_id;
           if (payment.method === "CARD") payload.card_last4 = payment.card_last4;
           placeOrder(payload);
         }}>
           <select value={payment.method} onChange={(event) => update("method", event.target.value)}>
+            <option value="RAZORPAY">Razorpay UPI</option>
+            <option value="STRIPE">Stripe</option>
+            <option value="PAYPAL">PayPal</option>
             <option value="UPI">UPI</option>
             <option value="CARD">Debit/Credit Card</option>
             <option value="COD">Cash on Delivery</option>
           </select>
           <input required placeholder="Payer name" value={payment.payer_name} onChange={(event) => update("payer_name", event.target.value)} />
-          {payment.method === "UPI" && <input required placeholder="UPI ID" value={payment.upi_id} onChange={(event) => update("upi_id", event.target.value)} />}
+          {(payment.method === "UPI" || payment.method === "RAZORPAY") && <input required placeholder="UPI ID" value={payment.upi_id} onChange={(event) => update("upi_id", event.target.value)} />}
           {payment.method === "CARD" && <input required maxLength="4" placeholder="Last 4 card digits" value={payment.card_last4} onChange={(event) => update("card_last4", event.target.value.replace(/\D/g, ""))} />}
           <button type="submit">{actionLabel}</button>
           <button type="button" className="secondary" onClick={() => go("checkout")}>Back to Address</button>
@@ -295,7 +348,7 @@ function OrdersPage({ orders, buyer, go }) {
           <article className="order-card" key={order.id}>
             <div>
               <h2>{order.order_number}</h2>
-              <p>{order.status} | {order.payment_method} | {order.payment_status}</p>
+              <p>{order.status} | {order.tracking_status} | {order.payment_method} | {order.payment_status}</p>
             </div>
             <strong>{money(order.total_amount)}</strong>
             <div className="order-items">{order.items.map((item) => <span key={item.id}>{item.quantity} x {item.title}</span>)}</div>
@@ -355,12 +408,15 @@ export default function App() {
   const [page, setPage] = useState("home");
   const [activeRole, setActiveRole] = useState("buyer");
   const [query, setQuery] = useState("");
-  const [selectedCategory, setSelectedCategory] = useState("all");
+  const [filters, setFilters] = useState({ category: "all", max_price: "", min_rating: "" });
   const [categories, setCategories] = useState([]);
   const [products, setProducts] = useState([]);
   const [selectedProduct, setSelectedProduct] = useState(null);
+  const [productReviews, setProductReviews] = useState([]);
+  const [wishlist, setWishlist] = useState([]);
   const [cart, setCart] = useState(emptyCart);
   const [users, setUsers] = useState([]);
+  const [authUser, setAuthUser] = useState(null);
   const [orders, setOrders] = useState([]);
   const [sellerDashboard, setSellerDashboard] = useState(null);
   const [checkoutAddress, setCheckoutAddress] = useState(null);
@@ -368,7 +424,7 @@ export default function App() {
   const [loading, setLoading] = useState(false);
   const [notice, setNotice] = useState("");
 
-  const buyer = users.find((user) => user.id === BUYER_ID);
+  const buyer = authUser || users.find((user) => user.id === BUYER_ID);
   const seller = users.find((user) => user.id === SELLER_ID);
   const currentUser = activeRole === "buyer" ? buyer : seller;
   const cartCount = useMemo(() => cart.items.reduce((total, item) => total + item.quantity, 0), [cart.items]);
@@ -380,6 +436,7 @@ export default function App() {
     api.users().then(setUsers).catch((error) => setNotice(error.message));
     api.categories().then(setCategories).catch((error) => setNotice(error.message));
     api.cart().then(setCart).catch(() => setCart(emptyCart));
+    api.wishlist().then((payload) => setWishlist(payload.items)).catch(() => setWishlist([]));
     refreshOrders();
     refreshSeller();
   }, []);
@@ -387,13 +444,13 @@ export default function App() {
   useEffect(() => {
     setLoading(true);
     const timeout = setTimeout(() => {
-      api.products({ search: query, category: selectedCategory })
+      api.products({ search: query, category: filters.category, max_price: filters.max_price, min_rating: filters.min_rating })
         .then(setProducts)
         .catch((error) => setNotice(error.message))
         .finally(() => setLoading(false));
     }, 250);
     return () => clearTimeout(timeout);
-  }, [query, selectedCategory]);
+  }, [query, filters]);
 
   useEffect(() => {
     if (activeRole === "seller") setPage("seller");
@@ -414,6 +471,7 @@ export default function App() {
   const openProduct = async (id) => {
     try {
       setSelectedProduct(await api.product(id));
+      setProductReviews(await api.reviews(id));
       setPage("detail");
     } catch (error) {
       setNotice(error.message);
@@ -457,15 +515,69 @@ export default function App() {
     }
   };
 
+  const login = async (payload) => {
+    try {
+      const result = await api.login({ email: payload.email, password: payload.password });
+      setAuthUser(result.user);
+      setNotice("Logged in");
+      setPage("home");
+    } catch (error) {
+      setNotice(error.message);
+    }
+  };
+
+  const signup = async (payload) => {
+    try {
+      const result = await api.signup(payload);
+      setAuthUser(result.user);
+      setUsers((current) => [result.user, ...current.filter((user) => user.id !== result.user.id)]);
+      setNotice("Account created");
+      setPage("home");
+    } catch (error) {
+      setNotice(error.message);
+    }
+  };
+
+  const googleLogin = async (payload) => {
+    try {
+      const result = await api.googleLogin(payload);
+      setAuthUser(result.user);
+      setNotice("Signed in with Google demo");
+      setPage("home");
+    } catch (error) {
+      setNotice(error.message);
+    }
+  };
+
+  const toggleWishlist = async (productId) => {
+    try {
+      const payload = await api.toggleWishlist(productId);
+      setWishlist(payload.items);
+    } catch (error) {
+      setNotice(error.message);
+    }
+  };
+
+  const addReview = async (payload) => {
+    try {
+      await api.addReview(payload);
+      setProductReviews(await api.reviews(payload.product_id));
+      setNotice("Review submitted");
+    } catch (error) {
+      setNotice(error.message);
+    }
+  };
+
   return (
     <ErrorBoundary>
       <Header query={query} setQuery={setQuery} cartCount={cartCount} page={page} go={go} activeRole={activeRole} setActiveRole={setActiveRole} currentUser={currentUser} />
       {notice && <button className="toast" onClick={() => setNotice("")}>{notice}</button>}
-      {page === "home" && <HomePage products={products} categories={categories} selectedCategory={selectedCategory} setSelectedCategory={setSelectedCategory} openProduct={openProduct} loading={loading} buyer={buyer} />}
+      {page === "auth" && <AuthPage login={login} signup={signup} googleLogin={googleLogin} />}
+      {page === "home" && <HomePage products={products} categories={categories} filters={filters} setFilters={setFilters} openProduct={openProduct} loading={loading} buyer={buyer} wishlistIds={wishlist.map((item) => item.id)} toggleWishlist={toggleWishlist} />}
       {page === "buyer" && <OrdersPage orders={orders} buyer={buyer} go={go} />}
       {page === "orders" && <OrdersPage orders={orders} buyer={buyer} go={go} />}
       {page === "seller" && <SellerPage dashboard={sellerDashboard} />}
-      {page === "detail" && <ProductDetail product={selectedProduct} onBack={() => setPage("home")} addToCart={addToCart} buyNow={buyNow} />}
+      {page === "detail" && <ProductDetail product={selectedProduct} onBack={() => setPage("home")} addToCart={addToCart} buyNow={buyNow} reviews={productReviews} addReview={addReview} />}
       {page === "cart" && <CartPage cart={cart} updateCart={(itemId, quantity) => api.updateCart(itemId, quantity).then(setCart)} removeCart={(itemId) => api.removeCart(itemId).then(setCart)} go={go} />}
       {page === "checkout" && <CheckoutPage cart={cart} buyer={buyer} setCheckoutAddress={setCheckoutAddress} go={go} />}
       {page === "payment" && <PaymentPage cart={cart} checkoutAddress={checkoutAddress} placeOrder={placeOrder} go={go} />}

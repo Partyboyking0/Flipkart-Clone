@@ -22,6 +22,8 @@ class User(Base):
     email: Mapped[str] = mapped_column(String(180), unique=True, nullable=False)
     phone: Mapped[str] = mapped_column(String(20), nullable=False)
     role: Mapped[str] = mapped_column(String(20), nullable=False)
+    password_hash: Mapped[str] = mapped_column(String(128), default="")
+    oauth_provider: Mapped[str] = mapped_column(String(40), default="")
     address_line: Mapped[str] = mapped_column(String(255), default="")
     city: Mapped[str] = mapped_column(String(100), default="")
     state: Mapped[str] = mapped_column(String(100), default="")
@@ -76,9 +78,20 @@ class CartItem(Base):
     __tablename__ = "cart_items"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
-    user_id: Mapped[int] = mapped_column(Integer, default=1, index=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), default=1, index=True)
     product_id: Mapped[int] = mapped_column(ForeignKey("products.id"), nullable=False)
     quantity: Mapped[int] = mapped_column(Integer, default=1)
+    created_at: Mapped[DateTime] = mapped_column(DateTime, server_default=func.now())
+
+    product: Mapped[Product] = relationship()
+
+
+class WishlistItem(Base):
+    __tablename__ = "wishlist_items"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    user_id: Mapped[int] = mapped_column(Integer, default=1, index=True)
+    product_id: Mapped[int] = mapped_column(ForeignKey("products.id"), nullable=False)
     created_at: Mapped[DateTime] = mapped_column(DateTime, server_default=func.now())
 
     product: Mapped[Product] = relationship()
@@ -101,6 +114,7 @@ class Order(Base):
     payment_status: Mapped[str] = mapped_column(String(40), default="PAID")
     payment_reference: Mapped[str] = mapped_column(String(80), default="")
     status: Mapped[str] = mapped_column(String(40), default="PLACED")
+    tracking_status: Mapped[str] = mapped_column(String(80), default="Order placed")
     created_at: Mapped[DateTime] = mapped_column(DateTime, server_default=func.now())
 
     items: Mapped[list["OrderItem"]] = relationship(back_populates="order", cascade="all, delete-orphan")
@@ -119,3 +133,18 @@ class OrderItem(Base):
 
     order: Mapped[Order] = relationship(back_populates="items")
     product: Mapped[Product] = relationship()
+
+
+class Review(Base):
+    __tablename__ = "reviews"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), default=1, index=True)
+    product_id: Mapped[int] = mapped_column(ForeignKey("products.id"), nullable=False)
+    rating: Mapped[int] = mapped_column(Integer, nullable=False)
+    comment: Mapped[str] = mapped_column(Text, nullable=False)
+    verified_purchase: Mapped[bool] = mapped_column(Boolean, default=False)
+    created_at: Mapped[DateTime] = mapped_column(DateTime, server_default=func.now())
+
+    product: Mapped[Product] = relationship()
+    user: Mapped[User] = relationship()

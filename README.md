@@ -13,13 +13,16 @@ A functional e-commerce web application inspired by Flipkart's browsing, cart, c
 
 - Product listing grid with Flipkart-like cards
 - Search products by name
-- Filter products by category
+- Filter products by category, price, and rating
 - Product detail page with image carousel, description, specs, stock, Add to Cart, and Buy Now
+- Login, signup, and demo Google OAuth sign-in
+- Wishlist add/remove
+- Reviews and star ratings with verified-purchase badges
 - Shopping cart with quantity update, remove item, subtotal, discount, delivery fee, and total
 - Checkout page with shipping address form
-- Payment step before order placement using UPI, card, or cash on delivery
+- Payment step before order placement using Stripe, Razorpay, PayPal, UPI, card, or cash on delivery
 - Order confirmation page with generated order ID
-- Buyer dashboard with user details and past order summaries
+- Buyer dashboard with user details, past order summaries, and tracking status
 - Seller dashboard with seller details, inventory, sales, and order summaries
 - Seed data across multiple categories
 - Responsive layout for mobile, tablet, and desktop

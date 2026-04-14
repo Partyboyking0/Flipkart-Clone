@@ -31,6 +31,7 @@ class UserOut(BaseModel):
     email: str
     phone: str
     role: str
+    oauth_provider: str
     address_line: str
     city: str
     state: str
@@ -57,6 +58,27 @@ class ProductOut(BaseModel):
     specs: list[ProductSpecOut]
 
     model_config = {"from_attributes": True}
+
+
+class AuthIn(BaseModel):
+    email: str = Field(min_length=5, max_length=180)
+    password: str = Field(min_length=6, max_length=80)
+
+
+class SignupIn(AuthIn):
+    name: str = Field(min_length=2, max_length=160)
+    phone: str = Field(min_length=10, max_length=20)
+
+
+class OAuthIn(BaseModel):
+    email: str = Field(min_length=5, max_length=180)
+    name: str = Field(min_length=2, max_length=160)
+    provider: str = Field(default="google", max_length=40)
+
+
+class AuthOut(BaseModel):
+    user: UserOut
+    token: str
 
 
 class CartAdd(BaseModel):
@@ -89,6 +111,10 @@ class CartOut(BaseModel):
     summary: CartSummaryOut
 
 
+class WishlistOut(BaseModel):
+    items: list[ProductOut]
+
+
 class AddressIn(BaseModel):
     customer_name: str = Field(min_length=2, max_length=160)
     phone: str = Field(min_length=10, max_length=20)
@@ -99,7 +125,7 @@ class AddressIn(BaseModel):
 
 
 class PaymentIn(BaseModel):
-    method: str = Field(pattern="^(UPI|CARD|COD)$")
+    method: str = Field(pattern="^(UPI|CARD|COD|STRIPE|RAZORPAY|PAYPAL)$")
     payer_name: str = Field(min_length=2, max_length=160)
     upi_id: str | None = Field(default=None, max_length=120)
     card_last4: str | None = Field(default=None, max_length=4)
@@ -113,8 +139,8 @@ class PaymentIn(BaseModel):
 
     @model_validator(mode="after")
     def validate_method_details(self):
-        if self.method == "UPI" and not self.upi_id:
-            raise ValueError("UPI ID is required for UPI payment")
+        if self.method in {"UPI", "RAZORPAY"} and not self.upi_id:
+            raise ValueError("UPI ID is required for UPI/Razorpay payment")
         if self.method == "CARD" and (not self.card_last4 or len(self.card_last4) != 4):
             raise ValueError("Last 4 card digits are required for card payment")
         return self
@@ -151,6 +177,7 @@ class OrderOut(BaseModel):
     payment_status: str
     payment_reference: str
     status: str
+    tracking_status: str
     items: list[OrderItemOut]
 
     model_config = {"from_attributes": True}
@@ -168,3 +195,21 @@ class SellerDashboardOut(BaseModel):
     products: list[ProductOut]
     orders: list[OrderOut]
     stats: SellerStatsOut
+
+
+class ReviewIn(BaseModel):
+    product_id: int
+    rating: int = Field(ge=1, le=5)
+    comment: str = Field(min_length=3, max_length=800)
+
+
+class ReviewOut(BaseModel):
+    id: int
+    user_id: int
+    product_id: int
+    rating: int
+    comment: str
+    verified_purchase: bool
+    user: UserOut
+
+    model_config = {"from_attributes": True}
