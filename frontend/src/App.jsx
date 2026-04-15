@@ -1,59 +1,196 @@
-import React, { Component, useEffect, useMemo, useState } from "react";
-import { api } from "./api";
+import React, { Component, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { AUTH_EXPIRED_EVENT, api } from "./api";
 
-const BUYER_ID = 1;
-const SELLER_ID = 2;
 const emptyCart = { items: [], summary: { mrp_total: 0, subtotal: 0, discount: 0, delivery_fee: 0, total: 0 } };
+const defaultChatMessages = [
+  { role: "assistant", content: "Hi, I am the Flipkart AI bot. Ask me about products, payments, orders, or general shopping questions." },
+];
+const orderSteps = ["PLACED", "PACKED", "SHIPPED", "DELIVERED"];
 
 const money = (value) =>
   new Intl.NumberFormat("en-IN", { style: "currency", currency: "INR", maximumFractionDigits: 0 }).format(value || 0);
 
 const rzpInput = {
-  width: "100%", padding: "10px 12px", border: "1px solid #ddd",
-  borderRadius: 6, fontSize: 14, outline: "none", boxSizing: "border-box",
-};
-const rzpPayBtn = {
-  width: "100%", padding: "12px", background: "#072654", color: "#fff",
-  border: "none", borderRadius: 6, fontWeight: 700, fontSize: 15,
-  cursor: "pointer", marginTop: 4,
+  width: "100%",
+  padding: "10px 12px",
+  border: "1px solid #ddd",
+  borderRadius: 6,
+  fontSize: 14,
+  outline: "none",
+  boxSizing: "border-box",
 };
 
+const rzpPayBtn = {
+  width: "100%",
+  padding: "12px",
+  background: "#172337",
+  color: "#fff",
+  border: "none",
+  borderRadius: 6,
+  fontWeight: 700,
+  fontSize: 15,
+  cursor: "pointer",
+};
+
+function statusTone(status) {
+  if (["PAID", "APPROVED", "DELIVERED", "ACTIVE", "RESOLVED", "VERIFIED"].includes(status)) return "good";
+  if (["PENDING", "PLACED", "PACKED", "SHIPPED", "IN_REVIEW", "REQUESTED"].includes(status)) return "warn";
+  return "bad";
+}
+
+function percentageOff(product) {
+  if (!product?.mrp) return 0;
+  return Math.round(((product.mrp - product.price) / product.mrp) * 100);
+}
+
+function readFilesAsDataUrls(files) {
+  return Promise.all(
+    files.map(
+      (file) =>
+        new Promise((resolve, reject) => {
+          const reader = new FileReader();
+          reader.onload = () => resolve(String(reader.result));
+          reader.onerror = reject;
+          reader.readAsDataURL(file);
+        }),
+    ),
+  );
+}
+
 class ErrorBoundary extends Component {
-  constructor(props) { super(props); this.state = { error: null }; }
-  static getDerivedStateFromError(error) { return { error }; }
+  constructor(props) {
+    super(props);
+    this.state = { error: null };
+  }
+
+  static getDerivedStateFromError(error) {
+    return { error };
+  }
+
   render() {
-    if (this.state.error) return <main className="fatal-error"><h1>Frontend error</h1><p>{this.state.error.message}</p></main>;
+    if (this.state.error) {
+      return (
+        <main className="fatal-error">
+          <h1>Frontend error</h1>
+          <p>{this.state.error.message}</p>
+        </main>
+      );
+    }
     return this.props.children;
   }
 }
 
-function Header({ query, setQuery, cartCount, page, go, activeRole, setActiveRole, currentUser }) {
+function StatusBadge({ value }) {
+  const tone = statusTone(value || "");
+  return <span className={`status-badge ${tone}`}>{value || "UNKNOWN"}</span>;
+}
+
+function TrackingTimeline({ status }) {
+  const currentIndex = Math.max(orderSteps.indexOf(status || "PLACED"), 0);
+  return (
+    <div className="tracking-line">
+      {orderSteps.map((step, index) => (
+        <div key={step} className={index <= currentIndex ? "tracking-step active" : "tracking-step"}>
+          <span>{index + 1}</span>
+          <strong>{step}</strong>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function GoogleSignInButton({ googleLogin }) {
+  const clientId = import.meta.env.VITE_GOOGLE_CLIENT_ID || "";
+  const ref = useRef(null);
+  const [error, setError] = useState("");
+  const origin = typeof window !== "undefined" ? window.location.origin : "";
+
+  useEffect(() => {
+    if (!clientId || !ref.current) return undefined;
+    let mounted = true;
+
+    const renderButton = () => {
+      if (!mounted || !window.google?.accounts?.id || !ref.current) return;
+      ref.current.innerHTML = "";
+      window.google.accounts.id.initialize({
+        client_id: clientId,
+        callback: ({ credential }) => {
+          if (credential) googleLogin({ credential, provider: "google" });
+        },
+      });
+      window.google.accounts.id.renderButton(ref.current, {
+        theme: "outline",
+        size: "large",
+        text: "continue_with",
+        shape: "rectangular",
+        width: 320,
+      });
+    };
+
+    const existing = document.querySelector("script[data-google-gsi]");
+    if (existing && window.google?.accounts?.id) {
+      renderButton();
+      return () => {
+        mounted = false;
+      };
+    }
+
+    const script = existing || document.createElement("script");
+    if (!existing) {
+      script.src = "https://accounts.google.com/gsi/client";
+      script.async = true;
+      script.defer = true;
+      script.dataset.googleGsi = "true";
+      script.onload = renderButton;
+      script.onerror = () => mounted && setError("Google sign-in could not load.");
+      document.head.appendChild(script);
+    } else {
+      script.addEventListener("load", renderButton);
+    }
+
+    return () => {
+      mounted = false;
+      if (existing) existing.removeEventListener("load", renderButton);
+    };
+  }, [clientId, googleLogin]);
+
+  if (!clientId) {
+    return <p className="helper-text">Add VITE_GOOGLE_CLIENT_ID to enable real Google OAuth.</p>;
+  }
+
+  return (
+    <div>
+      <div ref={ref} />
+      {origin && <p className="helper-text">For local Google OAuth, add {origin} to Authorized JavaScript origins in Google Cloud Console.</p>}
+      {error && <p className="helper-text bad-text">{error}</p>}
+    </div>
+  );
+}
+
+function Header({ query, setQuery, cartCount, currentUser, go, logout }) {
   const isAdmin = currentUser?.role === "admin";
+  const isSeller = currentUser?.role === "seller";
+
   return (
     <header className="topbar">
       <button className="brand" onClick={() => go("home")} aria-label="Go home">
-        <span>Flipkart</span><small>Explore Plus</small>
+        <span>Flipkart</span>
+        <small>Explore Plus</small>
       </button>
       <label className="search">
         <span>Search</span>
-        <input value={query} onChange={(e) => setQuery(e.target.value)}
-          placeholder="Search for products, brands and more"
-          disabled={page === "seller" || page === "admin"} />
+        <input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search for products, brands and more" />
       </label>
       <nav className="nav-actions">
-        {!isAdmin && (
-          <button onClick={() => setActiveRole(activeRole === "buyer" ? "seller" : "buyer")}>
-            Switch to {activeRole === "buyer" ? "Seller" : "Buyer"}
-          </button>
-        )}
-        <button onClick={() => go(currentUser ? (isAdmin ? "admin" : activeRole === "buyer" ? "buyer" : "seller") : "auth")}>
+        <button onClick={() => go(currentUser ? (isAdmin ? "admin" : isSeller ? "seller" : "account") : "auth")}>
           {currentUser?.name || "Login"}
         </button>
-        {isAdmin
-          ? <button onClick={() => go("admin")}>Admin Panel</button>
-          : <button onClick={() => go(activeRole === "buyer" ? "orders" : "seller")}>{activeRole === "buyer" ? "Orders" : "Seller Orders"}</button>
-        }
-        <button onClick={() => go("cart")}>Cart ({cartCount})</button>
+        {!isAdmin && currentUser && <button onClick={() => go("account")}>Account</button>}
+        {currentUser?.role === "buyer" && <button onClick={() => go("orders")}>Orders</button>}
+        {isSeller && <button onClick={() => go("seller")}>Seller</button>}
+        {isAdmin && <button onClick={() => go("admin")}>Admin</button>}
+        {!isAdmin && <button onClick={() => go(currentUser ? "cart" : "auth")}>Cart ({cartCount})</button>}
+        {currentUser && <button onClick={logout}>Logout</button>}
       </nav>
     </header>
   );
@@ -63,18 +200,28 @@ function UserPanel({ user }) {
   if (!user) return null;
   return (
     <section className="user-panel">
-      <div><h2>{user.role === "seller" ? user.store_name : user.name}</h2><p>{user.email}</p></div>
-      <div><span>{user.phone}</span><strong>{user.city}, {user.state} - {user.pincode}</strong></div>
+      <div>
+        <h2>{user.role === "seller" ? user.store_name || user.name : user.name}</h2>
+        <p>{user.email}</p>
+      </div>
+      <div>
+        <span>{user.phone}</span>
+        <strong>{user.city}, {user.state} - {user.pincode}</strong>
+      </div>
     </section>
   );
 }
 
 function ProductCard({ product, openProduct, wished, toggleWishlist }) {
-  const discount = Math.round(((product.mrp - product.price) / product.mrp) * 100);
   return (
     <article className="product-card" onClick={() => openProduct(product.id)}>
-      <button className={wished ? "wish-button wished" : "wish-button"}
-        onClick={(e) => { e.stopPropagation(); toggleWishlist(product.id); }}>
+      <button
+        className={wished ? "wish-button wished" : "wish-button"}
+        onClick={(event) => {
+          event.stopPropagation();
+          toggleWishlist(product.id);
+        }}
+      >
         {wished ? "Wishlisted" : "Wishlist"}
       </button>
       <div className="product-image">
@@ -82,43 +229,132 @@ function ProductCard({ product, openProduct, wished, toggleWishlist }) {
       </div>
       <h3>{product.title}</h3>
       <div className="rating-row">
-        <span className="rating">{product.rating} ★</span>
+        <span className="rating">{product.rating} star</span>
         <span>({product.reviews.toLocaleString("en-IN")})</span>
       </div>
       <div className="price-row">
         <strong>{money(product.price)}</strong>
         <span>{money(product.mrp)}</span>
-        <em>{discount}% off</em>
+        <em>{percentageOff(product)}% off</em>
       </div>
-      <p>{product.assured ? "Assured delivery" : "Standard delivery"}</p>
+      <p>{product.stock > 0 ? "In stock" : "Out of stock"}</p>
     </article>
   );
 }
 
-function HomePage({ products, categories, filters, setFilters, openProduct, loading, buyer, wishlistIds, toggleWishlist }) {
-  const updateFilter = (key, value) => setFilters((c) => ({ ...c, [key]: value }));
+function ProductRail({ title, items, openProduct, wishlistIds, toggleWishlist, emptyText = "Nothing here yet." }) {
+  return (
+    <section className="dashboard-card">
+      <div className="section-head">
+        <h2>{title}</h2>
+        <span>{items.length} items</span>
+      </div>
+      {items.length ? (
+        <div className="mini-grid">
+          {items.map((product) => (
+            <ProductCard
+              key={`${title}-${product.id}`}
+              product={product}
+              openProduct={openProduct}
+              wished={wishlistIds.includes(product.id)}
+              toggleWishlist={toggleWishlist}
+            />
+          ))}
+        </div>
+      ) : (
+        <div className="empty-state">{emptyText}</div>
+      )}
+    </section>
+  );
+}
+
+function HomePage({
+  products,
+  categories,
+  filters,
+  setFilters,
+  openProduct,
+  loading,
+  buyer,
+  wishlistIds,
+  toggleWishlist,
+  recommendations,
+  recentlyViewed,
+}) {
+  const updateFilter = (key, value) => setFilters((current) => ({ ...current, [key]: value }));
+
   return (
     <main className="page-shell">
       <aside className="filters">
         <h2>Filters</h2>
-        <button className={filters.category === "all" ? "active" : ""} onClick={() => updateFilter("category", "all")}>All Categories</button>
-        {categories.map((cat) => (
-          <button key={cat.id} className={filters.category === cat.slug ? "active" : ""} onClick={() => updateFilter("category", cat.slug)}>{cat.name}</button>
+        <button className={filters.category === "all" ? "active" : ""} onClick={() => updateFilter("category", "all")}>
+          All Categories
+        </button>
+        {categories.map((category) => (
+          <button
+            key={category.id}
+            className={filters.category === category.slug ? "active" : ""}
+            onClick={() => updateFilter("category", category.slug)}
+          >
+            {category.name}
+          </button>
         ))}
-        <label>Max Price<input type="number" value={filters.max_price} onChange={(e) => updateFilter("max_price", e.target.value)} placeholder="50000" /></label>
-        <label>Min Rating
-          <select value={filters.min_rating} onChange={(e) => updateFilter("min_rating", e.target.value)}>
-            <option value="">Any</option><option value="4">4+</option><option value="4.5">4.5+</option>
+        <label>
+          Max Price
+          <input type="number" value={filters.max_price} onChange={(event) => updateFilter("max_price", event.target.value)} placeholder="50000" />
+        </label>
+        <label>
+          Min Rating
+          <select value={filters.min_rating} onChange={(event) => updateFilter("min_rating", event.target.value)}>
+            <option value="">Any</option>
+            <option value="4">4+</option>
+            <option value="4.5">4.5+</option>
           </select>
         </label>
       </aside>
       <section className="listing">
         <UserPanel user={buyer} />
-        <div className="listing-title"><h1>Top Deals For You</h1><span>{products.length} products</span></div>
-        {loading ? <div className="empty-state">Loading products...</div>
-          : products.length
-            ? <div className="grid">{products.map((p) => <ProductCard key={p.id} product={p} openProduct={openProduct} wished={wishlistIds.includes(p.id)} toggleWishlist={toggleWishlist} />)}</div>
-            : <div className="empty-state">No products matched your search.</div>}
+        {buyer?.role === "buyer" && (
+          <div className="stack-gap">
+            <ProductRail
+              title="AI Recommendations"
+              items={recommendations}
+              openProduct={openProduct}
+              wishlistIds={wishlistIds}
+              toggleWishlist={toggleWishlist}
+              emptyText="Browse a few products and this section will warm up."
+            />
+            <ProductRail
+              title="Recently Viewed"
+              items={recentlyViewed}
+              openProduct={openProduct}
+              wishlistIds={wishlistIds}
+              toggleWishlist={toggleWishlist}
+              emptyText="Your viewed products will show up here."
+            />
+          </div>
+        )}
+        <div className="listing-title">
+          <h1>Top Deals For You</h1>
+          <span>{products.length} products</span>
+        </div>
+        {loading ? (
+          <div className="empty-state">Loading products...</div>
+        ) : products.length ? (
+          <div className="grid">
+            {products.map((product) => (
+              <ProductCard
+                key={product.id}
+                product={product}
+                openProduct={openProduct}
+                wished={wishlistIds.includes(product.id)}
+                toggleWishlist={toggleWishlist}
+              />
+            ))}
+          </div>
+        ) : (
+          <div className="empty-state">No products matched your search.</div>
+        )}
       </section>
     </main>
   );
@@ -128,33 +364,40 @@ function ProductDetail({ product, onBack, addToCart, buyNow, reviews, addReview 
   const [imageIndex, setImageIndex] = useState(0);
   const [reviewForm, setReviewForm] = useState({ rating: 5, comment: "" });
   if (!product) return null;
+
   const image = product.images[imageIndex] || product.images[0];
-  const discount = Math.round(((product.mrp - product.price) / product.mrp) * 100);
+
   return (
     <main className="detail-page">
-      <button className="back-link" onClick={onBack}>← Back to products</button>
+      <button className="back-link" onClick={onBack}>Back to products</button>
       <section className="detail-layout">
         <div className="gallery">
           <div className="thumbs">
-            {product.images.map((img, i) => (
-              <button key={img.id} className={i === imageIndex ? "selected" : ""} onClick={() => setImageIndex(i)}>
-                <img src={img.url} alt={img.alt} />
+            {product.images.map((item, index) => (
+              <button key={item.id} className={imageIndex === index ? "selected" : ""} onClick={() => setImageIndex(index)}>
+                <img src={item.url} alt={item.alt} />
               </button>
             ))}
           </div>
-          <div className="hero-image"><img src={image?.url} alt={image?.alt || product.title} /></div>
+          <div className="hero-image">
+            <img src={image?.url} alt={image?.alt || product.title} />
+          </div>
         </div>
         <div className="detail-info">
           <p className="brand-name">{product.brand}</p>
           <h1>{product.title}</h1>
           <div className="rating-row">
-            <span className="rating">{product.rating} ★</span>
-            <span>{product.reviews.toLocaleString("en-IN")} Ratings & Reviews</span>
+            <span className="rating">{product.rating} star</span>
+            <span>{product.reviews.toLocaleString("en-IN")} ratings and reviews</span>
           </div>
           <div className="detail-price">
-            <strong>{money(product.price)}</strong><span>{money(product.mrp)}</span><em>{discount}% off</em>
+            <strong>{money(product.price)}</strong>
+            <span>{money(product.mrp)}</span>
+            <em>{percentageOff(product)}% off</em>
           </div>
-          <p className={product.stock > 0 ? "stock in" : "stock out"}>{product.stock > 0 ? `${product.stock} in stock` : "Out of stock"}</p>
+          <p className={product.stock > 0 ? "stock in" : "stock out"}>
+            {product.stock > 0 ? `${product.stock} in stock` : "Out of stock"}
+          </p>
           <p className="description">{product.description}</p>
           <div className="detail-actions">
             <button onClick={() => addToCart(product.id)} disabled={product.stock === 0}>Add to Cart</button>
@@ -162,22 +405,43 @@ function ProductDetail({ product, onBack, addToCart, buyNow, reviews, addReview 
           </div>
           <section className="specs">
             <h2>Specifications</h2>
-            {product.specs.map((spec) => <div key={spec.id}><span>{spec.name}</span><strong>{spec.value}</strong></div>)}
+            {product.specs.map((spec) => (
+              <div key={spec.id}>
+                <span>{spec.name}</span>
+                <strong>{spec.value}</strong>
+              </div>
+            ))}
           </section>
           <section className="reviews">
-            <h2>Reviews & Ratings</h2>
-            <form onSubmit={(e) => { e.preventDefault(); addReview({ product_id: product.id, rating: Number(reviewForm.rating), comment: reviewForm.comment }); setReviewForm({ rating: 5, comment: "" }); }}>
-              <select value={reviewForm.rating} onChange={(e) => setReviewForm((c) => ({ ...c, rating: e.target.value }))}>
-                {[5,4,3,2,1].map((r) => <option key={r} value={r}>{r} star</option>)}
+            <h2>Reviews and Ratings</h2>
+            <form
+              onSubmit={(event) => {
+                event.preventDefault();
+                addReview({ product_id: product.id, rating: Number(reviewForm.rating), comment: reviewForm.comment });
+                setReviewForm({ rating: 5, comment: "" });
+              }}
+            >
+              <select value={reviewForm.rating} onChange={(event) => setReviewForm((current) => ({ ...current, rating: event.target.value }))}>
+                {[5, 4, 3, 2, 1].map((rating) => (
+                  <option key={rating} value={rating}>{rating} star</option>
+                ))}
               </select>
-              <input required value={reviewForm.comment} onChange={(e) => setReviewForm((c) => ({ ...c, comment: e.target.value }))} placeholder="Write a review" />
+              <input required value={reviewForm.comment} onChange={(event) => setReviewForm((current) => ({ ...current, comment: event.target.value }))} placeholder="Write a review" />
               <button type="submit">Submit</button>
             </form>
-            {reviews.map((rev) => (
-              <article className="review-card" key={rev.id}>
-                <strong>{rev.rating} ★ by {rev.user.name}</strong>
-                {rev.verified_purchase && <span>Verified Purchase</span>}
-                <p>{rev.comment}</p>
+            {reviews.map((review) => (
+              <article className="review-card" key={review.id}>
+                <strong>{review.rating} star by {review.user.name}</strong>
+                <div className="inline-metadata">
+                  {review.verified_purchase && <StatusBadge value="VERIFIED" />}
+                </div>
+                <p>{review.comment}</p>
+                {review.seller_response && (
+                  <div className="seller-response">
+                    <strong>Seller response</strong>
+                    <p>{review.seller_response}</p>
+                  </div>
+                )}
               </article>
             ))}
           </section>
@@ -208,45 +472,95 @@ function CartPage({ cart, updateCart, removeCart, go }) {
     <main className="cart-page">
       <section className="cart-items">
         <h1>My Cart ({cart.items.length})</h1>
-        {cart.items.length ? cart.items.map((item) => (
-          <article className="cart-line" key={item.id}>
-            <img src={item.product.images[0]?.url} alt={item.product.title} />
-            <div>
-              <h2>{item.product.title}</h2><p>{item.product.brand}</p>
-              <strong>{money(item.product.price)}</strong>
-              <div className="quantity">
-                <button onClick={() => updateCart(item.id, Math.max(1, item.quantity - 1))}>-</button>
-                <span>{item.quantity}</span>
-                <button onClick={() => updateCart(item.id, Math.min(10, item.product.stock, item.quantity + 1))}>+</button>
-                <button className="remove" onClick={() => removeCart(item.id)}>Remove</button>
+        {cart.items.length ? (
+          cart.items.map((item) => (
+            <article className="cart-line" key={item.id}>
+              <img src={item.product.images[0]?.url} alt={item.product.title} />
+              <div>
+                <h2>{item.product.title}</h2>
+                <p>{item.product.brand}</p>
+                <strong>{money(item.product.price)}</strong>
+                <div className="quantity">
+                  <button onClick={() => updateCart(item.id, Math.max(1, item.quantity - 1))}>-</button>
+                  <span>{item.quantity}</span>
+                  <button onClick={() => updateCart(item.id, Math.min(10, item.product.stock, item.quantity + 1))}>+</button>
+                  <button className="remove" onClick={() => removeCart(item.id)}>Remove</button>
+                </div>
               </div>
-            </div>
-          </article>
-        )) : <div className="empty-state">Your cart is empty.</div>}
+            </article>
+          ))
+        ) : (
+          <div className="empty-state">Your cart is empty.</div>
+        )}
       </section>
       <PriceBox summary={cart.summary} action={cart.items.length ? () => go("checkout") : null} label="Continue to Checkout" />
     </main>
   );
 }
 
-function CheckoutPage({ cart, buyer, setCheckoutAddress, go }) {
+function CheckoutPage({ cart, buyer, addresses, setCheckoutAddress, go, saveAddress }) {
+  const defaultAddress = addresses.find((address) => address.is_default) || addresses[0];
   const [form, setForm] = useState({
-    customer_name: buyer?.name || "", phone: buyer?.phone || "",
-    address_line: buyer?.address_line || "", city: buyer?.city || "",
-    state: buyer?.state || "", pincode: buyer?.pincode || "",
+    label: defaultAddress?.label || "Home",
+    customer_name: defaultAddress?.customer_name || buyer?.name || "",
+    phone: defaultAddress?.phone || buyer?.phone || "",
+    address_line: defaultAddress?.address_line || buyer?.address_line || "",
+    city: defaultAddress?.city || buyer?.city || "",
+    state: defaultAddress?.state || buyer?.state || "",
+    pincode: defaultAddress?.pincode || buyer?.pincode || "",
   });
-  const update = (key, value) => setForm((c) => ({ ...c, [key]: value }));
+  const [saveToBook, setSaveToBook] = useState(false);
+  const update = (key, value) => setForm((current) => ({ ...current, [key]: value }));
+
   return (
     <main className="checkout-page">
       <section className="checkout-form">
         <h1>Delivery Address</h1>
-        <form onSubmit={(e) => { e.preventDefault(); setCheckoutAddress(form); go("payment"); }}>
-          <input required placeholder="Full name" value={form.customer_name} onChange={(e) => update("customer_name", e.target.value)} />
-          <input required placeholder="Mobile number" value={form.phone} onChange={(e) => update("phone", e.target.value)} />
-          <textarea required placeholder="Address" value={form.address_line} onChange={(e) => update("address_line", e.target.value)} />
-          <input required placeholder="City" value={form.city} onChange={(e) => update("city", e.target.value)} />
-          <input required placeholder="State" value={form.state} onChange={(e) => update("state", e.target.value)} />
-          <input required placeholder="Pincode" value={form.pincode} onChange={(e) => update("pincode", e.target.value)} />
+        {addresses.length ? (
+          <div className="picker-grid">
+            {addresses.map((address) => (
+              <button
+                key={address.id}
+                type="button"
+                className={address.is_default ? "picker-card selected" : "picker-card"}
+                onClick={() =>
+                  setForm({
+                    label: address.label,
+                    customer_name: address.customer_name,
+                    phone: address.phone,
+                    address_line: address.address_line,
+                    city: address.city,
+                    state: address.state,
+                    pincode: address.pincode,
+                  })
+                }
+              >
+                <strong>{address.label}</strong>
+                <span>{address.address_line}</span>
+                <small>{address.city}, {address.state} - {address.pincode}</small>
+              </button>
+            ))}
+          </div>
+        ) : null}
+        <form
+          onSubmit={async (event) => {
+            event.preventDefault();
+            if (saveToBook) await saveAddress(form);
+            setCheckoutAddress(form);
+            go("payment");
+          }}
+        >
+          <input required placeholder="Label" value={form.label} onChange={(event) => update("label", event.target.value)} />
+          <input required placeholder="Full name" value={form.customer_name} onChange={(event) => update("customer_name", event.target.value)} />
+          <input required placeholder="Mobile number" value={form.phone} onChange={(event) => update("phone", event.target.value)} />
+          <textarea required placeholder="Address" value={form.address_line} onChange={(event) => update("address_line", event.target.value)} />
+          <input required placeholder="City" value={form.city} onChange={(event) => update("city", event.target.value)} />
+          <input required placeholder="State" value={form.state} onChange={(event) => update("state", event.target.value)} />
+          <input required placeholder="Pincode" value={form.pincode} onChange={(event) => update("pincode", event.target.value)} />
+          <label className="checkbox-row">
+            <input type="checkbox" checked={saveToBook} onChange={(event) => setSaveToBook(event.target.checked)} />
+            <span>Save this as an address</span>
+          </label>
           <button type="submit">Continue to Payment</button>
           <button type="button" className="secondary" onClick={() => go("cart")}>Back to Cart</button>
         </form>
@@ -259,22 +573,24 @@ function CheckoutPage({ cart, buyer, setCheckoutAddress, go }) {
 function AuthPage({ login, signup, googleLogin }) {
   const [mode, setMode] = useState("login");
   const [form, setForm] = useState({ name: "", email: "aarav.buyer@example.com", phone: "9876543210", password: "password123" });
-  const update = (key, value) => setForm((c) => ({ ...c, [key]: value }));
+  const update = (key, value) => setForm((current) => ({ ...current, [key]: value }));
+
   return (
     <main className="dashboard-page">
       <section className="checkout-form auth-box">
         <h1>{mode === "login" ? "Login" : "Signup"}</h1>
-        <p style={{ fontSize: 13, color: "#878787", marginBottom: 12 }}>
-          Demo buyer: <strong>aarav.buyer@example.com</strong> / <strong>password123</strong><br />
+        <p className="helper-text">
+          Demo buyer: <strong>aarav.buyer@example.com</strong> / <strong>password123</strong>
+          <br />
           Admin: <strong>admin@flipkart.com</strong> / <strong>admin123</strong>
         </p>
-        <form onSubmit={(e) => { e.preventDefault(); mode === "login" ? login(form) : signup(form); }}>
-          {mode === "signup" && <input required placeholder="Full name" value={form.name} onChange={(e) => update("name", e.target.value)} />}
-          {mode === "signup" && <input required placeholder="Phone" value={form.phone} onChange={(e) => update("phone", e.target.value)} />}
-          <input required placeholder="Email" value={form.email} onChange={(e) => update("email", e.target.value)} />
-          <input required type="password" placeholder="Password" value={form.password} onChange={(e) => update("password", e.target.value)} />
+        <form onSubmit={(event) => { event.preventDefault(); mode === "login" ? login(form) : signup(form); }}>
+          {mode === "signup" && <input required placeholder="Full name" value={form.name} onChange={(event) => update("name", event.target.value)} />}
+          {mode === "signup" && <input required placeholder="Phone" value={form.phone} onChange={(event) => update("phone", event.target.value)} />}
+          <input required placeholder="Email" value={form.email} onChange={(event) => update("email", event.target.value)} />
+          <input required type="password" placeholder="Password" value={form.password} onChange={(event) => update("password", event.target.value)} />
           <button type="submit">{mode === "login" ? "Login" : "Create Account"}</button>
-          <button type="button" className="secondary" onClick={() => googleLogin({ email: "google.user@example.com", name: "Google Demo User", provider: "google" })}>Continue with Google</button>
+          <GoogleSignInButton googleLogin={googleLogin} />
           <button type="button" className="link-button" onClick={() => setMode(mode === "login" ? "signup" : "login")}>
             {mode === "login" ? "Create new account" : "Already have an account"}
           </button>
@@ -284,50 +600,66 @@ function AuthPage({ login, signup, googleLogin }) {
   );
 }
 
-// ── Simulated Razorpay Payment Page ──────────────────────────────────────────
-function PaymentPage({ cart, checkoutAddress, placeOrder, go, setNotice }) {
-  const [method, setMethod]               = useState("RAZORPAY");
-  const [payerName, setPayerName]         = useState(checkoutAddress?.customer_name || "");
-  const [upiId, setUpiId]                 = useState("");
-  const [cardNumber, setCardNumber]       = useState("");
-  const [cardExpiry, setCardExpiry]       = useState("");
-  const [cardCvv, setCardCvv]             = useState("");
-  const [cardName, setCardName]           = useState("");
-  const [loading, setLoading]             = useState(false);
-  const [rzpOpen, setRzpOpen]             = useState(false);
-  const [rzpTab, setRzpTab]               = useState("card");
-  const [rzpUpi, setRzpUpi]               = useState("");
+function PaymentPage({ cart, checkoutAddress, paymentMethods, savePaymentMethod, placeOrder, go, setNotice }) {
+  const defaultPayment = paymentMethods.find((method) => method.is_default) || null;
+  const [method, setMethod] = useState(defaultPayment?.provider || "RAZORPAY");
+  const [payerName, setPayerName] = useState(checkoutAddress?.customer_name || "");
+  const [upiId, setUpiId] = useState(defaultPayment?.upi_id || "");
+  const [cardNumber, setCardNumber] = useState(defaultPayment?.card_last4 || "");
+  const [saveMethod, setSaveMethod] = useState(false);
+  const [loading, setLoading] = useState(false);
+  const [rzpOpen, setRzpOpen] = useState(false);
+  const [rzpTab, setRzpTab] = useState("card");
+  const [rzpUpi, setRzpUpi] = useState("");
   const [rzpProcessing, setRzpProcessing] = useState(false);
-
   const total = cart.summary.total;
 
-  const handleRzpPay = async (e) => {
-    e.preventDefault();
+  const applySavedMethod = (saved) => {
+    setMethod(saved.provider);
+    setUpiId(saved.upi_id || "");
+    setCardNumber(saved.card_last4 || "");
+    setSaveMethod(false);
+  };
+
+  const handleRazorpayPay = async (event) => {
+    event.preventDefault();
     setRzpProcessing(true);
-    await new Promise((res) => setTimeout(res, 1800));
-    const fakePayId = `pay_${Math.random().toString(36).slice(2,18).toUpperCase()}`;
-    const fakeOrdId = `order_${Math.random().toString(36).slice(2,18).toUpperCase()}`;
+    await new Promise((resolve) => setTimeout(resolve, 1400));
+    const fakePayId = `pay_${Math.random().toString(36).slice(2, 14).toUpperCase()}`;
+    const fakeOrderId = `order_${Math.random().toString(36).slice(2, 14).toUpperCase()}`;
     setRzpProcessing(false);
     setRzpOpen(false);
     await placeOrder({
       method: "RAZORPAY",
       payer_name: payerName || checkoutAddress?.customer_name,
       payment_reference: fakePayId,
-      razorpay_order_id: fakeOrdId,
+      razorpay_order_id: fakeOrderId,
     });
   };
 
-  const handleSubmit = async (e) => {
-    e.preventDefault();
-    if (method === "RAZORPAY") { setRzpOpen(true); return; }
+  const handleSubmit = async (event) => {
+    event.preventDefault();
+    if (method === "RAZORPAY") {
+      setRzpOpen(true);
+      return;
+    }
     setLoading(true);
     try {
+      if (saveMethod && ["UPI", "CARD"].includes(method)) {
+        await savePaymentMethod({
+          provider: method,
+          label: method === "UPI" ? `UPI ${upiId}` : `Card ending ${cardNumber.slice(-4)}`,
+          upi_id: method === "UPI" ? upiId : "",
+          card_last4: method === "CARD" ? cardNumber.slice(-4) : "",
+          is_default: paymentMethods.length === 0,
+        });
+      }
       const payload = { method, payer_name: payerName };
-      if (method === "UPI")  payload.upi_id    = upiId;
+      if (method === "UPI") payload.upi_id = upiId;
       if (method === "CARD") payload.card_last4 = cardNumber.slice(-4);
       await placeOrder(payload);
-    } catch (err) {
-      setNotice(err.message);
+    } catch (error) {
+      setNotice(error.message);
     } finally {
       setLoading(false);
     }
@@ -335,139 +667,90 @@ function PaymentPage({ cart, checkoutAddress, placeOrder, go, setNotice }) {
 
   return (
     <>
-      {/* ── Razorpay-look-alike modal ─────────────────────────────────────── */}
       {rzpOpen && (
-        <div style={{ position:"fixed", inset:0, background:"rgba(0,0,0,0.6)", display:"flex", alignItems:"center", justifyContent:"center", zIndex:9999 }}>
-          <div style={{ background:"#fff", borderRadius:12, width:"min(460px,96vw)", boxShadow:"0 24px 64px rgba(0,0,0,0.35)", overflow:"hidden", fontFamily:"system-ui,sans-serif" }}>
-
-            {/* Header */}
-            <div style={{ background:"#072654", padding:"16px 20px", display:"flex", justifyContent:"space-between", alignItems:"center" }}>
+        <div className="modal-backdrop">
+          <div className="modal-panel">
+            <div className="modal-head">
               <div>
-                <div style={{ color:"#fff", fontWeight:700, fontSize:15 }}>Flipkart Clone</div>
-                <div style={{ color:"#8eb4e3", fontSize:12 }}>Secure Payment • {money(total)}</div>
+                <strong>Flipkart Clone</strong>
+                <span>Secure payment for {money(total)}</span>
               </div>
-              <div style={{ display:"flex", alignItems:"center", gap:8 }}>
-                <span style={{ background:"#1a9e5c", color:"#fff", fontSize:10, padding:"2px 8px", borderRadius:3, fontWeight:700 }}>TEST MODE</span>
-                <button onClick={() => { setRzpOpen(false); setNotice("Payment cancelled"); }}
-                  style={{ color:"#8eb4e3", background:"none", border:"none", fontSize:22, cursor:"pointer", lineHeight:1 }}>×</button>
-              </div>
+              <button onClick={() => setRzpOpen(false)}>Close</button>
             </div>
-
-            {/* Tabs */}
-            <div style={{ display:"flex", borderBottom:"2px solid #f0f0f0" }}>
-              {[["card","💳 Card"],["upi","📱 UPI"],["netbanking","🏦 Netbanking"]].map(([k,label]) => (
-                <button key={k} onClick={() => setRzpTab(k)} style={{
-                  flex:1, padding:"11px 0", border:"none", cursor:"pointer",
-                  background: rzpTab===k ? "#fff" : "#f8f8f8",
-                  borderBottom: rzpTab===k ? "2px solid #072654" : "none",
-                  fontWeight: rzpTab===k ? 700 : 400,
-                  fontSize:12, color: rzpTab===k ? "#072654" : "#666",
-                }}>{label}</button>
+            <div className="modal-tabs">
+              {["card", "upi", "netbanking"].map((tab) => (
+                <button key={tab} className={rzpTab === tab ? "active" : ""} onClick={() => setRzpTab(tab)}>
+                  {tab}
+                </button>
               ))}
             </div>
-
-            <div style={{ padding:20 }}>
+            <div className="modal-body">
               {rzpProcessing ? (
-                <div style={{ textAlign:"center", padding:"32px 0" }}>
-                  <div style={{ fontSize:40, marginBottom:12 }}>⏳</div>
-                  <div style={{ fontWeight:700, color:"#072654", fontSize:16 }}>Processing payment...</div>
-                  <div style={{ color:"#888", fontSize:13, marginTop:6 }}>Please wait, do not close this window</div>
-                  <div style={{ marginTop:20, height:5, background:"#f0f0f0", borderRadius:3, overflow:"hidden" }}>
-                    <div style={{ height:"100%", background:"#072654", borderRadius:3, animation:"rzpBar 1.8s ease forwards" }} />
-                  </div>
-                  <style>{`@keyframes rzpBar{from{width:0}to{width:100%}}`}</style>
-                </div>
+                <div className="empty-state">Processing payment...</div>
               ) : (
-                <form onSubmit={handleRzpPay}>
-                  {rzpTab==="card" && (
-                    <div style={{ display:"grid", gap:12 }}>
-                      <div style={{ fontSize:12, color:"#555", background:"#fffbe6", border:"1px solid #ffe58f", padding:"7px 10px", borderRadius:5 }}>
-                        🧪 Test — any card number, any future expiry, any CVV
+                <form onSubmit={handleRazorpayPay}>
+                  {rzpTab === "card" && (
+                    <div className="stack-gap">
+                      <input required placeholder="Card number" style={rzpInput} />
+                      <input required placeholder="Name on card" style={rzpInput} />
+                      <div className="two-col">
+                        <input required placeholder="MM/YY" style={rzpInput} />
+                        <input required placeholder="CVV" style={rzpInput} />
                       </div>
-                      <input required placeholder="Card number (any 16 digits)" maxLength={19} value={cardNumber}
-                        onChange={(e) => setCardNumber(e.target.value.replace(/\D/g,"").replace(/(.{4})/g,"$1 ").trim())}
-                        style={rzpInput} />
-                      <input required placeholder="Name on card" value={cardName}
-                        onChange={(e) => setCardName(e.target.value)} style={rzpInput} />
-                      <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:10 }}>
-                        <input required placeholder="MM/YY" maxLength={5} value={cardExpiry}
-                          onChange={(e) => { let v=e.target.value.replace(/\D/g,""); if(v.length>=2) v=v.slice(0,2)+"/"+v.slice(2,4); setCardExpiry(v); }}
-                          style={rzpInput} />
-                        <input required placeholder="CVV" maxLength={3} type="password" value={cardCvv}
-                          onChange={(e) => setCardCvv(e.target.value.replace(/\D/g,""))} style={rzpInput} />
-                      </div>
-                      <button type="submit" style={rzpPayBtn}>Pay {money(total)}</button>
                     </div>
                   )}
-
-                  {rzpTab==="upi" && (
-                    <div style={{ display:"grid", gap:12 }}>
-                      <div style={{ fontSize:12, color:"#555", background:"#fffbe6", border:"1px solid #ffe58f", padding:"7px 10px", borderRadius:5 }}>
-                        🧪 Enter any UPI ID — payment always succeeds in test mode
-                      </div>
-                      <input required placeholder="Enter UPI ID (e.g. name@upi)" value={rzpUpi}
-                        onChange={(e) => setRzpUpi(e.target.value)} style={rzpInput} />
-                      <button type="submit" style={rzpPayBtn}>Verify & Pay {money(total)}</button>
-                    </div>
+                  {rzpTab === "upi" && (
+                    <input required placeholder="Enter UPI ID" value={rzpUpi} onChange={(event) => setRzpUpi(event.target.value)} style={rzpInput} />
                   )}
-
-                  {rzpTab==="netbanking" && (
-                    <div style={{ display:"grid", gap:12 }}>
-                      <div style={{ fontSize:12, color:"#555", background:"#fffbe6", border:"1px solid #ffe58f", padding:"7px 10px", borderRadius:5 }}>
-                        🧪 Select any bank — will succeed automatically
-                      </div>
-                      <select required defaultValue="" style={rzpInput}>
-                        <option value="" disabled>Select your bank</option>
-                        {["SBI","HDFC Bank","ICICI Bank","Axis Bank","Kotak Bank","PNB","Bank of Baroda","Canara Bank","IndusInd Bank","Yes Bank"].map((b) => (
-                          <option key={b} value={b}>{b}</option>
-                        ))}
-                      </select>
-                      <button type="submit" style={rzpPayBtn}>Proceed to Bank</button>
-                    </div>
+                  {rzpTab === "netbanking" && (
+                    <select required defaultValue="" style={rzpInput}>
+                      <option value="" disabled>Select bank</option>
+                      {["SBI", "HDFC", "ICICI", "Axis", "Kotak"].map((bank) => (
+                        <option key={bank} value={bank}>{bank}</option>
+                      ))}
+                    </select>
                   )}
+                  <button type="submit" style={rzpPayBtn}>Pay {money(total)}</button>
                 </form>
               )}
-            </div>
-
-            <div style={{ padding:"10px 20px", background:"#f8f8f8", textAlign:"center", fontSize:11, color:"#aaa", display:"flex", alignItems:"center", justifyContent:"center", gap:5 }}>
-              🔒 Secured by <strong style={{ color:"#072654", marginLeft:3 }}>Razorpay</strong>&nbsp;• Simulated Test Mode
             </div>
           </div>
         </div>
       )}
-
-      {/* ── Payment method selector ───────────────────────────────────────── */}
       <main className="checkout-page">
         <section className="checkout-form">
           <h1>Payment</h1>
+          {paymentMethods.length ? (
+            <div className="picker-grid">
+              {paymentMethods.map((saved) => (
+                <button key={saved.id} type="button" className="picker-card" onClick={() => applySavedMethod(saved)}>
+                  <strong>{saved.label}</strong>
+                  <span>{saved.provider}</span>
+                  <small>{saved.upi_id || (saved.card_last4 ? `xxxx-${saved.card_last4}` : "Saved option")}</small>
+                </button>
+              ))}
+            </div>
+          ) : null}
           <form onSubmit={handleSubmit}>
-            <select value={method} onChange={(e) => setMethod(e.target.value)}>
-              <option value="RAZORPAY">💳 Razorpay (Card / UPI / Netbanking)</option>
-              <option value="UPI">📱 UPI (Demo)</option>
-              <option value="CARD">💳 Debit/Credit Card (Demo)</option>
-              <option value="STRIPE">🌐 Stripe (Demo)</option>
-              <option value="PAYPAL">🅿 PayPal (Demo)</option>
-              <option value="COD">🚚 Cash on Delivery</option>
+            <select value={method} onChange={(event) => setMethod(event.target.value)}>
+              <option value="RAZORPAY">Razorpay</option>
+              <option value="UPI">UPI</option>
+              <option value="CARD">Debit or Credit Card</option>
+              <option value="STRIPE">Stripe</option>
+              <option value="PAYPAL">PayPal</option>
+              <option value="COD">Cash on Delivery</option>
             </select>
-
-            <input required placeholder="Payer name" value={payerName}
-              onChange={(e) => setPayerName(e.target.value)} />
-
-            {method === "UPI" && (
-              <input required placeholder="UPI ID" value={upiId} onChange={(e) => setUpiId(e.target.value)} />
+            <input required placeholder="Payer name" value={payerName} onChange={(event) => setPayerName(event.target.value)} />
+            {method === "UPI" && <input required placeholder="UPI ID" value={upiId} onChange={(event) => setUpiId(event.target.value)} />}
+            {method === "CARD" && <input required maxLength="4" placeholder="Last 4 card digits" value={cardNumber} onChange={(event) => setCardNumber(event.target.value.replace(/\D/g, ""))} />}
+            {["UPI", "CARD"].includes(method) && (
+              <label className="checkbox-row">
+                <input type="checkbox" checked={saveMethod} onChange={(event) => setSaveMethod(event.target.checked)} />
+                <span>Save this payment method</span>
+              </label>
             )}
-            {method === "CARD" && (
-              <input required maxLength="4" placeholder="Last 4 card digits"
-                value={cardNumber} onChange={(e) => setCardNumber(e.target.value.replace(/\D/g,""))} />
-            )}
-            {method === "RAZORPAY" && (
-              <div style={{ padding:10, background:"#eaf2ff", borderRadius:6, fontSize:13, color:"#2874f0" }}>
-                ✅ A secure Razorpay-style payment window will open. No real card needed — test mode works with any details.
-              </div>
-            )}
-
             <button type="submit" disabled={loading}>
-              {loading ? "Processing..." : method === "COD" ? "Place Order" : `Pay ${money(total)} & Place Order`}
+              {loading ? "Processing..." : method === "COD" ? "Place Order" : `Pay ${money(total)} and Place Order`}
             </button>
             <button type="button" className="secondary" onClick={() => go("checkout")}>Back to Address</button>
           </form>
@@ -485,7 +768,7 @@ function OrderReview({ cart }) {
       {cart.items.map((item) => (
         <div className="review-line" key={item.id}>
           <span>{item.product.title}</span>
-          <strong>{item.quantity} × {money(item.product.price)}</strong>
+          <strong>{item.quantity} x {money(item.product.price)}</strong>
         </div>
       ))}
       <PriceBox summary={cart.summary} />
@@ -493,30 +776,357 @@ function OrderReview({ cart }) {
   );
 }
 
-function OrdersPage({ orders, buyer, go }) {
+function OrdersPage({ orders, buyer, go, reorderOrder, submitComplaint }) {
+  const [complaintDrafts, setComplaintDrafts] = useState({});
+  const updateDraft = (orderId, key, value) =>
+    setComplaintDrafts((current) => ({
+      ...current,
+      [orderId]: { ...(current[orderId] || { subject: "", message: "", open: false }), [key]: value },
+    }));
+
   return (
     <main className="dashboard-page">
       <UserPanel user={buyer} />
       <section className="dashboard-card">
         <h1>Past Orders</h1>
-        {orders.length ? orders.map((order) => (
-          <article className="order-card" key={order.id}>
-            <div>
-              <h2>{order.order_number}</h2>
-              <p>{order.status} | {order.tracking_status} | {order.payment_method} | {order.payment_status}</p>
-            </div>
-            <strong>{money(order.total_amount)}</strong>
-            <div className="order-items">{order.items.map((item) => <span key={item.id}>{item.quantity} × {item.title}</span>)}</div>
-          </article>
-        )) : <div className="empty-state">No orders yet.</div>}
+        {orders.length ? (
+          orders.map((order) => {
+            const draft = complaintDrafts[order.id] || { subject: "", message: "", open: false };
+            return (
+              <article className="order-card" key={order.id}>
+                <div className="order-card-head">
+                  <div>
+                    <h2>{order.order_number}</h2>
+                    <p>{order.payment_method} | {order.payment_status} | {order.created_at?.slice?.(0, 10)}</p>
+                  </div>
+                  <strong>{money(order.total_amount)}</strong>
+                </div>
+                <TrackingTimeline status={order.status} />
+                <div className="inline-metadata">
+                  <StatusBadge value={order.status} />
+                  <StatusBadge value={order.tracking_status} />
+                  {order.refund_status !== "NONE" && <StatusBadge value={order.refund_status} />}
+                </div>
+                <div className="order-items detail-list">
+                  {order.items.map((item) => (
+                    <div key={item.id}>
+                      <span>{item.quantity} x {item.title}</span>
+                      <strong>{item.status}</strong>
+                    </div>
+                  ))}
+                </div>
+                <div className="button-row">
+                  <button onClick={() => reorderOrder(order.order_number)}>Reorder</button>
+                  <button className="secondary" onClick={() => updateDraft(order.id, "open", !draft.open)}>
+                    {draft.open ? "Hide Issue Form" : "Report Issue"}
+                  </button>
+                </div>
+                {draft.open && (
+                  <form
+                    className="inline-form"
+                    onSubmit={(event) => {
+                      event.preventDefault();
+                      submitComplaint({ order_id: order.id, subject: draft.subject, message: draft.message });
+                      setComplaintDrafts((current) => ({ ...current, [order.id]: { subject: "", message: "", open: false } }));
+                    }}
+                  >
+                    <input required placeholder="Issue title" value={draft.subject} onChange={(event) => updateDraft(order.id, "subject", event.target.value)} />
+                    <textarea required placeholder="Tell us what happened" value={draft.message} onChange={(event) => updateDraft(order.id, "message", event.target.value)} />
+                    <button type="submit">Submit Issue</button>
+                  </form>
+                )}
+              </article>
+            );
+          })
+        ) : (
+          <div className="empty-state">No orders yet.</div>
+        )}
         <button className="wide-action" onClick={() => go("home")}>Continue Shopping</button>
       </section>
     </main>
   );
 }
 
-function SellerPage({ dashboard }) {
+function AccountPage({
+  user,
+  updateProfile,
+  addresses,
+  saveAddress,
+  updateAddress,
+  deleteAddress,
+  paymentMethods,
+  savePaymentMethod,
+  deletePaymentMethod,
+  recentlyViewed,
+  recommendations,
+  complaints,
+  submitComplaint,
+  openProduct,
+  wishlistIds,
+  toggleWishlist,
+}) {
+  const [profile, setProfile] = useState({
+    name: user?.name || "",
+    phone: user?.phone || "",
+    address_line: user?.address_line || "",
+    city: user?.city || "",
+    state: user?.state || "",
+    pincode: user?.pincode || "",
+    store_name: user?.store_name || "",
+  });
+  const [addressForm, setAddressForm] = useState({
+    label: "Home",
+    customer_name: user?.name || "",
+    phone: user?.phone || "",
+    address_line: "",
+    city: "",
+    state: "",
+    pincode: "",
+  });
+  const [paymentForm, setPaymentForm] = useState({ provider: "UPI", label: "", upi_id: "", card_last4: "" });
+  const [complaintForm, setComplaintForm] = useState({ subject: "", message: "" });
+
+  useEffect(() => {
+    setProfile({
+      name: user?.name || "",
+      phone: user?.phone || "",
+      address_line: user?.address_line || "",
+      city: user?.city || "",
+      state: user?.state || "",
+      pincode: user?.pincode || "",
+      store_name: user?.store_name || "",
+    });
+  }, [user]);
+
+  return (
+    <main className="dashboard-page">
+      <UserPanel user={user} />
+      <section className="account-grid">
+        <section className="dashboard-card">
+          <h1>Profile</h1>
+          <form className="inline-form" onSubmit={(event) => { event.preventDefault(); updateProfile(profile); }}>
+            <input value={profile.name} onChange={(event) => setProfile((current) => ({ ...current, name: event.target.value }))} placeholder="Full name" />
+            <input value={profile.phone} onChange={(event) => setProfile((current) => ({ ...current, phone: event.target.value }))} placeholder="Phone" />
+            <textarea value={profile.address_line} onChange={(event) => setProfile((current) => ({ ...current, address_line: event.target.value }))} placeholder="Primary address" />
+            <div className="two-col">
+              <input value={profile.city} onChange={(event) => setProfile((current) => ({ ...current, city: event.target.value }))} placeholder="City" />
+              <input value={profile.state} onChange={(event) => setProfile((current) => ({ ...current, state: event.target.value }))} placeholder="State" />
+            </div>
+            <input value={profile.pincode} onChange={(event) => setProfile((current) => ({ ...current, pincode: event.target.value }))} placeholder="Pincode" />
+            {user?.role === "seller" && <input value={profile.store_name} onChange={(event) => setProfile((current) => ({ ...current, store_name: event.target.value }))} placeholder="Store name" />}
+            <button type="submit">Save Profile</button>
+          </form>
+        </section>
+        <section className="dashboard-card">
+          <div className="section-head">
+            <h1>Multiple Addresses</h1>
+            <span>{addresses.length} saved</span>
+          </div>
+          <div className="stack-gap">
+            {addresses.map((address) => (
+              <div className="detail-list-card" key={address.id}>
+                <div>
+                  <strong>{address.label}</strong>
+                  <p>{address.customer_name}, {address.phone}</p>
+                  <p>{address.address_line}, {address.city}, {address.state} - {address.pincode}</p>
+                </div>
+                <div className="button-row">
+                  <button className="secondary" onClick={() => updateAddress(address.id, { is_default: true })}>Set Default</button>
+                  <button className="secondary" onClick={() => deleteAddress(address.id)}>Delete</button>
+                </div>
+              </div>
+            ))}
+          </div>
+          <form
+            className="inline-form"
+            onSubmit={(event) => {
+              event.preventDefault();
+              saveAddress(addressForm);
+              setAddressForm({ label: "Home", customer_name: user?.name || "", phone: user?.phone || "", address_line: "", city: "", state: "", pincode: "" });
+            }}
+          >
+            <input value={addressForm.label} onChange={(event) => setAddressForm((current) => ({ ...current, label: event.target.value }))} placeholder="Label" />
+            <input value={addressForm.customer_name} onChange={(event) => setAddressForm((current) => ({ ...current, customer_name: event.target.value }))} placeholder="Customer name" />
+            <input value={addressForm.phone} onChange={(event) => setAddressForm((current) => ({ ...current, phone: event.target.value }))} placeholder="Phone" />
+            <textarea value={addressForm.address_line} onChange={(event) => setAddressForm((current) => ({ ...current, address_line: event.target.value }))} placeholder="Address" />
+            <div className="two-col">
+              <input value={addressForm.city} onChange={(event) => setAddressForm((current) => ({ ...current, city: event.target.value }))} placeholder="City" />
+              <input value={addressForm.state} onChange={(event) => setAddressForm((current) => ({ ...current, state: event.target.value }))} placeholder="State" />
+            </div>
+            <input value={addressForm.pincode} onChange={(event) => setAddressForm((current) => ({ ...current, pincode: event.target.value }))} placeholder="Pincode" />
+            <button type="submit">Add Address</button>
+          </form>
+        </section>
+        <section className="dashboard-card">
+          <div className="section-head">
+            <h1>Saved Payment Methods</h1>
+            <span>{paymentMethods.length} saved</span>
+          </div>
+          <div className="stack-gap">
+            {paymentMethods.map((method) => (
+              <div className="detail-list-card" key={method.id}>
+                <div>
+                  <strong>{method.label}</strong>
+                  <p>{method.provider}</p>
+                  <p>{method.upi_id || (method.card_last4 ? `xxxx-${method.card_last4}` : "Saved option")}</p>
+                </div>
+                <div className="button-row">
+                  <button className="secondary" onClick={() => deletePaymentMethod(method.id)}>Delete</button>
+                </div>
+              </div>
+            ))}
+          </div>
+          <form
+            className="inline-form"
+            onSubmit={(event) => {
+              event.preventDefault();
+              savePaymentMethod(paymentForm);
+              setPaymentForm({ provider: "UPI", label: "", upi_id: "", card_last4: "" });
+            }}
+          >
+            <select value={paymentForm.provider} onChange={(event) => setPaymentForm((current) => ({ ...current, provider: event.target.value }))}>
+              <option value="UPI">UPI</option>
+              <option value="CARD">Card</option>
+            </select>
+            <input value={paymentForm.label} onChange={(event) => setPaymentForm((current) => ({ ...current, label: event.target.value }))} placeholder="Label" />
+            {paymentForm.provider === "UPI" ? (
+              <input value={paymentForm.upi_id} onChange={(event) => setPaymentForm((current) => ({ ...current, upi_id: event.target.value }))} placeholder="UPI ID" />
+            ) : (
+              <input value={paymentForm.card_last4} onChange={(event) => setPaymentForm((current) => ({ ...current, card_last4: event.target.value.replace(/\D/g, "") }))} placeholder="Last 4 digits" maxLength="4" />
+            )}
+            <button type="submit">Save Payment Method</button>
+          </form>
+        </section>
+      </section>
+      <div className="stack-gap">
+        <ProductRail title="Recently Viewed" items={recentlyViewed} openProduct={openProduct} wishlistIds={wishlistIds} toggleWishlist={toggleWishlist} />
+        <ProductRail title="Recommended For You" items={recommendations} openProduct={openProduct} wishlistIds={wishlistIds} toggleWishlist={toggleWishlist} />
+        <section className="dashboard-card">
+          <div className="section-head">
+            <h1>Complaints and Support</h1>
+            <span>{complaints.length} total</span>
+          </div>
+          <form
+            className="inline-form"
+            onSubmit={(event) => {
+              event.preventDefault();
+              submitComplaint(complaintForm);
+              setComplaintForm({ subject: "", message: "" });
+            }}
+          >
+            <input value={complaintForm.subject} onChange={(event) => setComplaintForm((current) => ({ ...current, subject: event.target.value }))} placeholder="Issue title" />
+            <textarea value={complaintForm.message} onChange={(event) => setComplaintForm((current) => ({ ...current, message: event.target.value }))} placeholder="Tell us what happened" />
+            <button type="submit">Submit Complaint</button>
+          </form>
+          <div className="stack-gap">
+            {complaints.map((complaint) => (
+              <div className="detail-list-card" key={complaint.id}>
+                <div>
+                  <strong>{complaint.subject}</strong>
+                  <p>{complaint.message}</p>
+                </div>
+                <div className="stack-mini">
+                  <StatusBadge value={complaint.status} />
+                  {complaint.resolution_note ? <small>{complaint.resolution_note}</small> : null}
+                </div>
+              </div>
+            ))}
+          </div>
+        </section>
+      </div>
+    </main>
+  );
+}
+
+const th = { padding: "8px 12px", textAlign: "left", fontWeight: 700, color: "#555" };
+const td = { padding: "8px 12px" };
+
+function SellerPage({ dashboard, categories, saveSellerProduct, deleteSellerProduct, updateSellerOrderItemStatus, respondToReview }) {
+  const [tab, setTab] = useState("inventory");
+  const [editingProduct, setEditingProduct] = useState(null);
+  const [saving, setSaving] = useState(false);
+  const [productForm, setProductForm] = useState({
+    category_slug: categories[0]?.slug || "mobiles",
+    title: "",
+    brand: "",
+    description: "",
+    price: "",
+    mrp: "",
+    stock: "",
+    low_stock_threshold: 5,
+    assured: true,
+    images: [],
+    specsText: "",
+  });
+  const [reviewResponses, setReviewResponses] = useState({});
+
+  useEffect(() => {
+    if (!editingProduct) {
+      setProductForm({
+        category_slug: categories[0]?.slug || "mobiles",
+        title: "",
+        brand: "",
+        description: "",
+        price: "",
+        mrp: "",
+        stock: "",
+        low_stock_threshold: 5,
+        assured: true,
+        images: [],
+        specsText: "",
+      });
+      return;
+    }
+    setProductForm({
+      category_slug: editingProduct.category.slug,
+      title: editingProduct.title,
+      brand: editingProduct.brand,
+      description: editingProduct.description,
+      price: editingProduct.price,
+      mrp: editingProduct.mrp,
+      stock: editingProduct.stock,
+      low_stock_threshold: editingProduct.low_stock_threshold || 5,
+      assured: editingProduct.assured,
+      images: editingProduct.images.map((image) => image.url),
+      specsText: editingProduct.specs.map((spec) => `${spec.name}: ${spec.value}`).join("\n"),
+    });
+  }, [categories, editingProduct]);
+
   if (!dashboard) return <main className="dashboard-page"><div className="empty-state">Loading seller dashboard...</div></main>;
+
+  const submitProduct = async (event) => {
+    event.preventDefault();
+    setSaving(true);
+    try {
+      const specs = productForm.specsText
+        .split("\n")
+        .map((line) => line.trim())
+        .filter(Boolean)
+        .map((line) => {
+          const [name, ...rest] = line.split(":");
+          return { name: name.trim(), value: rest.join(":").trim() };
+        })
+        .filter((spec) => spec.name && spec.value);
+      const payload = {
+        category_slug: productForm.category_slug,
+        title: productForm.title,
+        brand: productForm.brand,
+        description: productForm.description,
+        price: Number(productForm.price),
+        mrp: Number(productForm.mrp),
+        stock: Number(productForm.stock),
+        low_stock_threshold: Number(productForm.low_stock_threshold),
+        assured: productForm.assured,
+        images: productForm.images,
+        specs,
+      };
+      await saveSellerProduct(editingProduct?.id, payload);
+      setEditingProduct(null);
+    } finally {
+      setSaving(false);
+    }
+  };
+
   return (
     <main className="dashboard-page">
       <UserPanel user={dashboard.seller} />
@@ -525,163 +1135,417 @@ function SellerPage({ dashboard }) {
         <div><span>Units Sold</span><strong>{dashboard.stats.units_sold}</strong></div>
         <div><span>Revenue</span><strong>{money(dashboard.stats.revenue)}</strong></div>
         <div><span>Orders</span><strong>{dashboard.stats.order_count}</strong></div>
+        <div><span>Low Stock</span><strong>{dashboard.stats.low_stock_count}</strong></div>
+        <div><span>Pending Review</span><strong>{dashboard.stats.pending_products}</strong></div>
       </section>
-      <section className="dashboard-card">
-        <h1>Seller Inventory</h1>
-        <div className="seller-table">
-          {dashboard.products.map((p) => <div key={p.id}><span>{p.title}</span><strong>{p.stock} left</strong><em>{money(p.price)}</em></div>)}
+      <div className="tab-row">
+        {["inventory", "products", "orders", "reviews"].map((tabName) => (
+          <button key={tabName} className={tab === tabName ? "active" : ""} onClick={() => setTab(tabName)}>{tabName}</button>
+        ))}
+      </div>
+      {tab === "inventory" && (
+        <section className="dashboard-card">
+          <div className="section-head">
+            <h1>Inventory Management</h1>
+            <span>Low stock and listing visibility</span>
+          </div>
+          <div className="seller-table">
+            {dashboard.products.map((product) => (
+              <div key={product.id}>
+                <span>{product.title}</span>
+                <strong>{product.stock > 0 ? `${product.stock} left` : "Out of stock"}</strong>
+                <em>{money(product.price)}</em>
+                <small>{product.stock <= product.low_stock_threshold ? "Low stock alert" : product.listing_status}</small>
+              </div>
+            ))}
+          </div>
+          <div className="stack-gap">
+            <h2>Top-selling products</h2>
+            {dashboard.top_products.length ? (
+              dashboard.top_products.map((item) => (
+                <div className="detail-list-card" key={item.product_id}>
+                  <strong>{item.title}</strong>
+                  <span>{item.units_sold} units sold</span>
+                  <strong>{money(item.revenue)}</strong>
+                </div>
+              ))
+            ) : (
+              <div className="empty-state">Top sellers will show up after your first few orders.</div>
+            )}
+          </div>
+        </section>
+      )}
+      {tab === "products" && (
+        <div className="account-grid">
+          <section className="dashboard-card">
+            <div className="section-head">
+              <h1>{editingProduct ? "Edit Product" : "Add Product"}</h1>
+              <span>{editingProduct ? "Update and resubmit" : "New listings start pending"}</span>
+            </div>
+            <form className="inline-form" onSubmit={submitProduct}>
+              <select value={productForm.category_slug} onChange={(event) => setProductForm((current) => ({ ...current, category_slug: event.target.value }))}>
+                {categories.map((category) => (
+                  <option key={category.id} value={category.slug}>{category.name}</option>
+                ))}
+              </select>
+              <input value={productForm.title} onChange={(event) => setProductForm((current) => ({ ...current, title: event.target.value }))} placeholder="Product title" />
+              <input value={productForm.brand} onChange={(event) => setProductForm((current) => ({ ...current, brand: event.target.value }))} placeholder="Brand" />
+              <textarea value={productForm.description} onChange={(event) => setProductForm((current) => ({ ...current, description: event.target.value }))} placeholder="Description" />
+              <div className="two-col">
+                <input value={productForm.price} onChange={(event) => setProductForm((current) => ({ ...current, price: event.target.value }))} placeholder="Price" />
+                <input value={productForm.mrp} onChange={(event) => setProductForm((current) => ({ ...current, mrp: event.target.value }))} placeholder="MRP" />
+              </div>
+              <div className="two-col">
+                <input value={productForm.stock} onChange={(event) => setProductForm((current) => ({ ...current, stock: event.target.value }))} placeholder="Stock" />
+                <input value={productForm.low_stock_threshold} onChange={(event) => setProductForm((current) => ({ ...current, low_stock_threshold: event.target.value }))} placeholder="Low stock threshold" />
+              </div>
+              <textarea value={productForm.specsText} onChange={(event) => setProductForm((current) => ({ ...current, specsText: event.target.value }))} placeholder="Specs, one per line. Example: RAM: 8 GB" />
+              <input
+                type="file"
+                multiple
+                accept="image/*"
+                onChange={async (event) => {
+                  const files = Array.from(event.target.files || []);
+                  if (!files.length) return;
+                  const images = await readFilesAsDataUrls(files);
+                  setProductForm((current) => ({ ...current, images }));
+                }}
+              />
+              <label className="checkbox-row">
+                <input type="checkbox" checked={productForm.assured} onChange={(event) => setProductForm((current) => ({ ...current, assured: event.target.checked }))} />
+                <span>Flipkart assured</span>
+              </label>
+              <button type="submit" disabled={saving}>{saving ? "Saving..." : editingProduct ? "Update Product" : "Add Product"}</button>
+              {editingProduct && <button type="button" className="secondary" onClick={() => setEditingProduct(null)}>Cancel Edit</button>}
+            </form>
+          </section>
+          <section className="dashboard-card">
+            <div className="section-head">
+              <h1>Product Management</h1>
+              <span>{dashboard.products.length} products</span>
+            </div>
+            <div className="stack-gap">
+              {dashboard.products.map((product) => (
+                <div className="detail-list-card" key={product.id}>
+                  <div>
+                    <strong>{product.title}</strong>
+                    <p>{money(product.price)} | Stock {product.stock} | {percentageOff(product)}% off</p>
+                    <div className="inline-metadata">
+                      <StatusBadge value={product.listing_status} />
+                      {product.stock <= product.low_stock_threshold && <StatusBadge value="LOW_STOCK" />}
+                    </div>
+                  </div>
+                  <div className="button-row">
+                    <button className="secondary" onClick={() => setEditingProduct(product)}>Edit</button>
+                    <button className="secondary" onClick={() => deleteSellerProduct(product.id)}>Delete</button>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </section>
         </div>
-      </section>
-      <section className="dashboard-card">
-        <h1>Orders Containing Your Products</h1>
-        {dashboard.orders.length ? dashboard.orders.map((order) => (
-          <article className="order-card" key={order.id}>
-            <div><h2>{order.order_number}</h2><p>{order.customer_name}, {order.city} | {order.payment_status}</p></div>
-            <strong>{money(order.total_amount)}</strong>
-          </article>
-        )) : <div className="empty-state">No seller orders yet.</div>}
-      </section>
+      )}
+      {tab === "orders" && (
+        <section className="dashboard-card">
+          <h1>Order Management</h1>
+          {dashboard.orders.length ? (
+            dashboard.orders.map((order) => (
+              <article className="order-card" key={order.id}>
+                <div className="order-card-head">
+                  <div>
+                    <h2>{order.order_number}</h2>
+                    <p>{order.customer_name}, {order.city}</p>
+                  </div>
+                  <strong>{money(order.total_amount)}</strong>
+                </div>
+                <div className="inline-metadata">
+                  <StatusBadge value={order.payment_status} />
+                  <StatusBadge value={order.status} />
+                </div>
+                {order.items.map((item) => (
+                  <div className="detail-list-card" key={item.id}>
+                    <div>
+                      <strong>{item.title}</strong>
+                      <p>{item.quantity} x {money(item.price)}</p>
+                    </div>
+                    <select value={item.status} onChange={(event) => updateSellerOrderItemStatus(order.id, item.id, event.target.value)}>
+                      {orderSteps.map((step) => (
+                        <option key={step} value={step}>{step}</option>
+                      ))}
+                    </select>
+                  </div>
+                ))}
+              </article>
+            ))
+          ) : (
+            <div className="empty-state">No seller orders yet.</div>
+          )}
+        </section>
+      )}
+      {tab === "reviews" && (
+        <section className="dashboard-card">
+          <h1>Customer Reviews</h1>
+          {dashboard.reviews.length ? (
+            dashboard.reviews.map((review) => (
+              <article className="review-card" key={review.id}>
+                <strong>{review.user.name} rated {review.rating} star</strong>
+                <p>{review.comment}</p>
+                <textarea value={reviewResponses[review.id] ?? review.seller_response ?? ""} onChange={(event) => setReviewResponses((current) => ({ ...current, [review.id]: event.target.value }))} placeholder="Reply to this review" />
+                <button onClick={() => respondToReview(review.id, reviewResponses[review.id] ?? review.seller_response ?? "")}>Save Response</button>
+              </article>
+            ))
+          ) : (
+            <div className="empty-state">No reviews yet.</div>
+          )}
+        </section>
+      )}
     </main>
   );
 }
 
-const th = { padding:"8px 12px", textAlign:"left", fontWeight:700, color:"#555" };
-const td = { padding:"8px 12px" };
-
 function AdminPage({ setNotice }) {
-  const [data, setData]       = useState(null);
-  const [tab, setTab]         = useState("overview");
+  const [data, setData] = useState(null);
+  const [tab, setTab] = useState("overview");
   const [loading, setLoading] = useState(true);
-
-  const load = () => {
+  const load = useCallback(() => {
     setLoading(true);
-    api.adminDashboard().then(setData).catch((e) => setNotice(e.message)).finally(() => setLoading(false));
-  };
-  useEffect(() => { load(); }, []);
-
-  const deleteUser = async (id) => {
-    if (!confirm("Delete this user?")) return;
-    try { await api.adminDeleteUser(id); setNotice("User deleted"); load(); } catch(e) { setNotice(e.message); }
-  };
-  const deleteProduct = async (id) => {
-    if (!confirm("Delete this product?")) return;
-    try { await api.adminDeleteProduct(id); setNotice("Product deleted"); load(); } catch(e) { setNotice(e.message); }
-  };
-
+    api.adminDashboard().then(setData).catch((error) => setNotice(error.message)).finally(() => setLoading(false));
+  }, [setNotice]);
+  useEffect(() => {
+    load();
+  }, [load]);
   if (loading) return <main className="dashboard-page"><div className="empty-state">Loading admin data...</div></main>;
   if (!data) return null;
-  const { stats, users, products, orders } = data;
-
+  const { stats, growth, users, products, orders, transactions, complaints, fraud_flags: fraudFlags } = data;
+  const updateUser = async (userId, payload, successMessage) => {
+    await api.adminUpdateUser(userId, payload);
+    setNotice(successMessage);
+    load();
+  };
+  const moderateProduct = async (productId, listing_status, approval_note) => {
+    await api.adminModerateProduct(productId, { listing_status, approval_note });
+    setNotice("Product status updated");
+    load();
+  };
+  const updateTransaction = async (transactionId, refund_status) => {
+    await api.adminUpdateTransaction(transactionId, { refund_status });
+    setNotice("Transaction updated");
+    load();
+  };
+  const updateComplaint = async (complaintId, status) => {
+    await api.adminUpdateComplaint(complaintId, { status, resolution_note: status === "RESOLVED" ? "Closed by admin" : "" });
+    setNotice("Complaint updated");
+    load();
+  };
+  const deleteUser = async (userId) => {
+    if (!window.confirm("Delete this user?")) return;
+    await api.adminDeleteUser(userId);
+    setNotice("User deleted");
+    load();
+  };
+  const deleteProduct = async (productId) => {
+    if (!window.confirm("Delete this product?")) return;
+    await api.adminDeleteProduct(productId);
+    setNotice("Product deleted");
+    load();
+  };
   return (
     <main className="dashboard-page">
-      <section style={{ background:"#172337", color:"#fff", padding:"20px 24px", borderRadius:8, marginBottom:20 }}>
-        <h1 style={{ margin:0, fontSize:22 }}>🛡️ Admin Dashboard</h1>
-        <p style={{ margin:"4px 0 0", color:"#a0aec0", fontSize:13 }}>Full platform overview</p>
+      <section className="admin-hero">
+        <h1>Admin Dashboard</h1>
+        <p>Platform monitoring, moderation, payments, and marketplace controls.</p>
       </section>
-
-      <section className="seller-stats" style={{ gridTemplateColumns:"repeat(3,1fr)", marginBottom:20 }}>
+      <section className="seller-stats admin-stats-grid">
         <div><span>Total Users</span><strong>{stats.total_users}</strong></div>
+        <div><span>Active Users</span><strong>{stats.active_users}</strong></div>
         <div><span>Total Products</span><strong>{stats.total_products}</strong></div>
         <div><span>Total Orders</span><strong>{stats.total_orders}</strong></div>
         <div><span>Revenue</span><strong>{money(stats.total_revenue)}</strong></div>
-        <div><span>Paid Orders</span><strong style={{ color:"#388e3c" }}>{stats.paid_orders}</strong></div>
-        <div><span>Pending</span><strong style={{ color:"#f44336" }}>{stats.pending_orders}</strong></div>
+        <div><span>Pending Sellers</span><strong>{stats.pending_sellers}</strong></div>
+        <div><span>Pending Products</span><strong>{stats.pending_products}</strong></div>
+        <div><span>Refunded</span><strong>{stats.refunded_transactions}</strong></div>
       </section>
-
-      <div style={{ display:"flex", gap:10, marginBottom:16 }}>
-        {["overview","users","products","orders"].map((t) => (
-          <button key={t} onClick={() => setTab(t)} style={{
-            padding:"8px 20px", borderRadius:4, border:"none",
-            background: tab===t ? "#2874f0" : "#f0f0f0",
-            color: tab===t ? "#fff" : "#333", fontWeight:700, cursor:"pointer",
-          }}>{t.charAt(0).toUpperCase()+t.slice(1)}</button>
+      <section className="dashboard-card">
+        <div className="section-head">
+          <h2>Growth Stats</h2>
+          <span>Last 7 days</span>
+        </div>
+        <div className="seller-stats admin-stats-grid">
+          <div><span>Users</span><strong>{growth.users_last_7_days}</strong><small>{growth.users_growth_percent}%</small></div>
+          <div><span>Orders</span><strong>{growth.orders_last_7_days}</strong><small>{growth.orders_growth_percent}%</small></div>
+          <div><span>Revenue</span><strong>{money(growth.revenue_last_7_days)}</strong><small>{growth.revenue_growth_percent}%</small></div>
+        </div>
+      </section>
+      <div className="tab-row">
+        {["overview", "users", "sellers", "products", "orders", "payments", "reports"].map((tabName) => (
+          <button key={tabName} className={tab === tabName ? "active" : ""} onClick={() => setTab(tabName)}>{tabName}</button>
         ))}
       </div>
-
-      {tab==="overview" && (
+      {tab === "overview" && (
         <section className="dashboard-card">
-          <h1>Platform Summary</h1>
-          <ul style={{ lineHeight:2.2, color:"#444" }}>
-            <li>👥 <strong>{stats.total_users}</strong> registered users</li>
-            <li>📦 <strong>{stats.total_products}</strong> products listed</li>
-            <li>🛒 <strong>{stats.total_orders}</strong> orders placed</li>
-            <li>💰 Total revenue: <strong>{money(stats.total_revenue)}</strong></li>
-            <li>✅ <strong>{stats.paid_orders}</strong> paid | ⏳ <strong>{stats.pending_orders}</strong> pending</li>
+          <ul className="summary-list">
+            <li>{stats.total_users} registered users across buyer and seller roles.</li>
+            <li>{stats.pending_sellers} sellers waiting for approval and {stats.pending_products} products waiting to go live.</li>
+            <li>{transactions.length} transactions tracked, with {stats.refunded_transactions} refunds already processed.</li>
+            <li>{complaints.length} complaints and {fraudFlags.length} fraud flags currently on the radar.</li>
           </ul>
         </section>
       )}
-
-      {tab==="users" && (
+      {tab === "users" && (
         <section className="dashboard-card">
-          <h1>All Users ({users.length})</h1>
-          <table style={{ width:"100%", borderCollapse:"collapse", fontSize:13 }}>
-            <thead><tr style={{ background:"#f5f5f5" }}>
-              <th style={th}>ID</th><th style={th}>Name</th><th style={th}>Email</th>
-              <th style={th}>Role</th><th style={th}>Phone</th><th style={th}>Action</th>
-            </tr></thead>
-            <tbody>{users.map((u) => (
-              <tr key={u.id} style={{ borderBottom:"1px solid #f0f0f0" }}>
-                <td style={td}>{u.id}</td><td style={td}>{u.name}</td><td style={td}>{u.email}</td>
-                <td style={td}><span style={{ padding:"2px 8px", borderRadius:4, background:u.role==="seller"?"#fff3e0":"#e8f5e9", color:u.role==="seller"?"#e65100":"#2e7d32", fontWeight:700, fontSize:11 }}>{u.role}</span></td>
-                <td style={td}>{u.phone}</td>
-                <td style={td}><button onClick={() => deleteUser(u.id)} style={{ color:"#f44336", background:"none", border:"1px solid #f44336", borderRadius:4, padding:"3px 10px", cursor:"pointer", fontSize:12 }}>Delete</button></td>
-              </tr>
-            ))}</tbody>
+          <h1>User Management</h1>
+          <table className="admin-table">
+            <thead><tr><th style={th}>Name</th><th style={th}>Email</th><th style={th}>Role</th><th style={th}>Status</th><th style={th}>Action</th></tr></thead>
+            <tbody>
+              {users.map((user) => (
+                <tr key={user.id}>
+                  <td style={td}>{user.name}</td>
+                  <td style={td}>{user.email}</td>
+                  <td style={td}>{user.role}</td>
+                  <td style={td}><StatusBadge value={user.is_active ? "ACTIVE" : "BANNED"} /></td>
+                  <td style={td}>
+                    <div className="button-row">
+                      <button className="secondary" onClick={() => updateUser(user.id, { is_active: !user.is_active }, user.is_active ? "User banned" : "User activated")}>{user.is_active ? "Ban" : "Activate"}</button>
+                      {user.role !== "admin" && <button className="secondary" onClick={() => updateUser(user.id, { role: user.role === "buyer" ? "seller" : "buyer" }, "Role updated")}>Make {user.role === "buyer" ? "Seller" : "Buyer"}</button>}
+                      <button className="secondary" onClick={() => deleteUser(user.id)}>Delete</button>
+                    </div>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
           </table>
         </section>
       )}
-
-      {tab==="products" && (
+      {tab === "sellers" && (
         <section className="dashboard-card">
-          <h1>All Products ({products.length})</h1>
-          <table style={{ width:"100%", borderCollapse:"collapse", fontSize:13 }}>
-            <thead><tr style={{ background:"#f5f5f5" }}>
-              <th style={th}>ID</th><th style={th}>Title</th><th style={th}>Brand</th>
-              <th style={th}>Price</th><th style={th}>Stock</th><th style={th}>Category</th><th style={th}>Action</th>
-            </tr></thead>
-            <tbody>{products.map((p) => (
-              <tr key={p.id} style={{ borderBottom:"1px solid #f0f0f0" }}>
-                <td style={td}>{p.id}</td><td style={td}>{p.title}</td><td style={td}>{p.brand}</td>
-                <td style={td}>{money(p.price)}</td>
-                <td style={td}><span style={{ color:p.stock<5?"#f44336":"#388e3c", fontWeight:700 }}>{p.stock}</span></td>
-                <td style={td}>{p.category?.name}</td>
-                <td style={td}><button onClick={() => deleteProduct(p.id)} style={{ color:"#f44336", background:"none", border:"1px solid #f44336", borderRadius:4, padding:"3px 10px", cursor:"pointer", fontSize:12 }}>Delete</button></td>
-              </tr>
-            ))}</tbody>
-          </table>
+          <h1>Seller Control</h1>
+          {users.filter((user) => user.role === "seller").map((seller) => (
+            <div className="detail-list-card" key={seller.id}>
+              <div>
+                <strong>{seller.store_name || seller.name}</strong>
+                <p>{seller.email}</p>
+                <div className="inline-metadata">
+                  <StatusBadge value={seller.seller_status} />
+                  <StatusBadge value={seller.is_active ? "ACTIVE" : "BANNED"} />
+                </div>
+              </div>
+              <div className="button-row">
+                <button className="secondary" onClick={() => updateUser(seller.id, { seller_status: "APPROVED" }, "Seller approved")}>Approve</button>
+                <button className="secondary" onClick={() => updateUser(seller.id, { seller_status: "REJECTED" }, "Seller rejected")}>Reject</button>
+                <button className="secondary" onClick={() => updateUser(seller.id, { seller_status: "SUSPENDED" }, "Seller suspended")}>Suspend</button>
+              </div>
+            </div>
+          ))}
         </section>
       )}
-
-      {tab==="orders" && (
+      {tab === "products" && (
         <section className="dashboard-card">
-          <h1>All Orders ({orders.length})</h1>
+          <h1>Product Control</h1>
+          {products.map((product) => (
+            <div className="detail-list-card" key={product.id}>
+              <div>
+                <strong>{product.title}</strong>
+                <p>{product.brand} | {money(product.price)} | Stock {product.stock}</p>
+                <div className="inline-metadata">
+                  <StatusBadge value={product.listing_status} />
+                  {product.approval_note ? <small>{product.approval_note}</small> : null}
+                </div>
+              </div>
+              <div className="button-row">
+                <button className="secondary" onClick={() => moderateProduct(product.id, "APPROVED", "Approved for listing")}>Approve</button>
+                <button className="secondary" onClick={() => moderateProduct(product.id, "REJECTED", "Rejected by admin")}>Reject</button>
+                <button className="secondary" onClick={() => deleteProduct(product.id)}>Remove</button>
+              </div>
+            </div>
+          ))}
+        </section>
+      )}
+      {tab === "orders" && (
+        <section className="dashboard-card">
+          <h1>Platform Orders</h1>
           {orders.map((order) => (
             <article className="order-card" key={order.id}>
-              <div>
-                <h2>{order.order_number}</h2>
-                <p>{order.customer_name} | {order.city} | {order.payment_method} |{" "}
-                  <span style={{ color:order.payment_status==="PAID"?"#388e3c":"#e65100", fontWeight:700 }}>{order.payment_status}</span>
-                </p>
+              <div className="order-card-head">
+                <div>
+                  <h2>{order.order_number}</h2>
+                  <p>{order.customer_name} | {order.city}</p>
+                </div>
+                <strong>{money(order.total_amount)}</strong>
               </div>
-              <strong>{money(order.total_amount)}</strong>
-              <div className="order-items">{order.items.map((item) => <span key={item.id}>{item.quantity} × {item.title}</span>)}</div>
+              <div className="inline-metadata">
+                <StatusBadge value={order.status} />
+                <StatusBadge value={order.payment_status} />
+                {order.refund_status !== "NONE" && <StatusBadge value={order.refund_status} />}
+              </div>
             </article>
           ))}
         </section>
       )}
+      {tab === "payments" && (
+        <section className="dashboard-card">
+          <h1>Payment Monitoring</h1>
+          {transactions.map((transaction) => (
+            <div className="detail-list-card" key={transaction.id}>
+              <div>
+                <strong>{transaction.provider}</strong>
+                <p>Order {transaction.order_id} | {money(transaction.amount)}</p>
+                <div className="inline-metadata">
+                  <StatusBadge value={transaction.status} />
+                  <StatusBadge value={transaction.refund_status} />
+                </div>
+              </div>
+              <div className="button-row">
+                <button className="secondary" onClick={() => updateTransaction(transaction.id, "REQUESTED")}>Mark Refund Requested</button>
+                <button className="secondary" onClick={() => updateTransaction(transaction.id, "REFUNDED")}>Refund</button>
+              </div>
+            </div>
+          ))}
+        </section>
+      )}
+      {tab === "reports" && (
+        <div className="account-grid">
+          <section className="dashboard-card">
+            <h1>Complaints</h1>
+            {complaints.map((complaint) => (
+              <div className="detail-list-card" key={complaint.id}>
+                <div>
+                  <strong>{complaint.subject}</strong>
+                  <p>{complaint.message}</p>
+                  <small>{complaint.user.name}</small>
+                </div>
+                <div className="button-row">
+                  <StatusBadge value={complaint.status} />
+                  <button className="secondary" onClick={() => updateComplaint(complaint.id, "IN_REVIEW")}>Review</button>
+                  <button className="secondary" onClick={() => updateComplaint(complaint.id, "RESOLVED")}>Resolve</button>
+                </div>
+              </div>
+            ))}
+          </section>
+          <section className="dashboard-card">
+            <h1>Fraud Detection</h1>
+            {fraudFlags.map((flag) => (
+              <div className="detail-list-card" key={flag.id}>
+                <div>
+                  <strong>Order {flag.order_id}</strong>
+                  <p>{flag.reason}</p>
+                </div>
+                <div className="inline-metadata">
+                  <StatusBadge value={flag.severity} />
+                  <StatusBadge value={flag.status} />
+                </div>
+              </div>
+            ))}
+          </section>
+        </div>
+      )}
     </main>
   );
 }
 
-function AIChatWidget({ open, setOpen, messages, sendMessage, loading }) {
+function AIChatWidget({ open, setOpen, messages, sendMessage, clearHistory, loading }) {
   const [draft, setDraft] = useState("");
-  const starters = [
-    "Suggest a phone under 25000",
-    "How do payments work here?",
-    "Show me my recent orders",
-  ];
+  const starters = ["Suggest a phone under 25000", "Compare Motorola and Sony", "How do payments work here?", "Show me my recent orders"];
   const showStarters = messages.length <= 1;
-
   const handleSubmit = async (event) => {
     event.preventDefault();
     if (!draft.trim() || loading) return;
@@ -689,7 +1553,6 @@ function AIChatWidget({ open, setOpen, messages, sendMessage, loading }) {
     setDraft("");
     await sendMessage(text);
   };
-
   return (
     <section className={open ? "ai-chat open" : "ai-chat"}>
       {open ? (
@@ -697,9 +1560,12 @@ function AIChatWidget({ open, setOpen, messages, sendMessage, loading }) {
           <div className="ai-chat-header">
             <div>
               <strong>Flipkart AI Bot</strong>
-              <span>OpenAI-powered shopping help</span>
+              <span>Shopping help with saved chat history</span>
             </div>
-            <button onClick={() => setOpen(false)}>Close</button>
+            <div className="ai-chat-header-actions">
+              <button onClick={clearHistory}>Clear</button>
+              <button onClick={() => setOpen(false)}>Close</button>
+            </div>
           </div>
           <div className="ai-chat-body">
             {messages.map((message, index) => (
@@ -708,13 +1574,7 @@ function AIChatWidget({ open, setOpen, messages, sendMessage, loading }) {
                 <p>{message.content}</p>
               </article>
             ))}
-            {showStarters && (
-              <div className="ai-starters">
-                {starters.map((starter) => (
-                  <button key={starter} onClick={() => sendMessage(starter)}>{starter}</button>
-                ))}
-              </div>
-            )}
+            {showStarters && <div className="ai-starters">{starters.map((starter) => <button key={starter} onClick={() => sendMessage(starter)}>{starter}</button>)}</div>}
             {loading && <div className="ai-msg assistant"><span>AI</span><p>Thinking...</p></div>}
           </div>
           <form className="ai-chat-form" onSubmit={handleSubmit}>
@@ -733,11 +1593,11 @@ function ConfirmationPage({ order, go }) {
   return (
     <main className="confirmation">
       <div>
-        <span className="success-mark">✓</span>
+        <span className="success-mark">OK</span>
         <h1>Order placed successfully!</h1>
         <p>Your order ID is <strong>{order?.order_number}</strong>.</p>
         <p>Payment: <strong>{order?.payment_method}</strong> | <strong>{order?.payment_status}</strong></p>
-        <p style={{ color:"#388e3c", fontSize:13 }}>📧 A confirmation email has been sent to your registered email address.</p>
+        <p className="helper-text">A confirmation email has been sent to your registered email address.</p>
         <button onClick={() => go("orders")}>View Order Summary</button>
       </div>
     </main>
@@ -745,124 +1605,477 @@ function ConfirmationPage({ order, go }) {
 }
 
 export default function App() {
-  const [page, setPage]                       = useState("home");
-  const [activeRole, setActiveRole]           = useState("buyer");
-  const [query, setQuery]                     = useState("");
-  const [filters, setFilters]                 = useState({ category:"all", max_price:"", min_rating:"" });
-  const [categories, setCategories]           = useState([]);
-  const [products, setProducts]               = useState([]);
+  const [page, setPage] = useState("home");
+  const [query, setQuery] = useState("");
+  const [filters, setFilters] = useState({ category: "all", max_price: "", min_rating: "" });
+  const [categories, setCategories] = useState([]);
+  const [products, setProducts] = useState([]);
   const [selectedProduct, setSelectedProduct] = useState(null);
-  const [productReviews, setProductReviews]   = useState([]);
-  const [wishlist, setWishlist]               = useState([]);
-  const [cart, setCart]                       = useState(emptyCart);
-  const [users, setUsers]                     = useState([]);
-  const [authUser, setAuthUser]               = useState(null);
-  const [orders, setOrders]                   = useState([]);
+  const [productReviews, setProductReviews] = useState([]);
+  const [wishlist, setWishlist] = useState([]);
+  const [cart, setCart] = useState(emptyCart);
+  const [authUser, setAuthUser] = useState(null);
+  const [authReady, setAuthReady] = useState(false);
+  const [orders, setOrders] = useState([]);
   const [sellerDashboard, setSellerDashboard] = useState(null);
+  const [addresses, setAddresses] = useState([]);
+  const [paymentMethods, setPaymentMethods] = useState([]);
+  const [recentlyViewed, setRecentlyViewed] = useState([]);
+  const [recommendations, setRecommendations] = useState([]);
+  const [complaints, setComplaints] = useState([]);
   const [checkoutAddress, setCheckoutAddress] = useState(null);
-  const [order, setOrder]                     = useState(null);
-  const [loading, setLoading]                 = useState(false);
-  const [notice, setNotice]                   = useState("");
-  const [chatOpen, setChatOpen]               = useState(false);
-  const [chatLoading, setChatLoading]         = useState(false);
-  const [chatMessages, setChatMessages]       = useState([
-    { role: "assistant", content: "Hi, I am the Flipkart AI bot. Ask me about products, payments, orders, or general shopping questions." },
-  ]);
+  const [order, setOrder] = useState(null);
+  const [loading, setLoading] = useState(false);
+  const [notice, setNotice] = useState("");
+  const [chatOpen, setChatOpen] = useState(false);
+  const [chatLoading, setChatLoading] = useState(false);
+  const [chatMessages, setChatMessages] = useState(defaultChatMessages);
 
-  const buyer       = authUser || users.find((u) => u.id === BUYER_ID);
-  const seller      = users.find((u) => u.id === SELLER_ID);
-  const currentUser = authUser || (activeRole === "buyer" ? buyer : seller);
-  const cartCount   = useMemo(() => cart.items.reduce((t,i) => t+i.quantity, 0), [cart.items]);
+  const currentUser = authUser;
+  const cartCount = useMemo(() => cart.items.reduce((total, item) => total + item.quantity, 0), [cart.items]);
 
-  const refreshOrders = () => api.orders().then(setOrders).catch((e) => setNotice(e.message));
-  const refreshSeller = () => api.sellerDashboard(SELLER_ID).then(setSellerDashboard).catch((e) => setNotice(e.message));
+  const resetProtectedState = useCallback(() => {
+    setCart(emptyCart);
+    setWishlist([]);
+    setOrders([]);
+    setSellerDashboard(null);
+    setAddresses([]);
+    setPaymentMethods([]);
+    setRecentlyViewed([]);
+    setRecommendations([]);
+    setComplaints([]);
+    setCheckoutAddress(null);
+    setOrder(null);
+    setChatMessages(defaultChatMessages);
+  }, []);
+
+  const ensureCustomerAccess = useCallback((message = "Please login to continue") => {
+    if (!currentUser) {
+      setNotice(message);
+      setPage("auth");
+      return false;
+    }
+    if (currentUser.role === "admin") {
+      setNotice("Admins cannot use buyer actions");
+      return false;
+    }
+    return true;
+  }, [currentUser]);
+
+  const refreshProfile = useCallback(async () => {
+    if (!api.hasToken()) return;
+    const user = await api.me();
+    setAuthUser(user);
+  }, []);
+
+  const refreshOrders = useCallback(() => {
+    if (!currentUser || currentUser.role !== "buyer") {
+      setOrders([]);
+      return Promise.resolve();
+    }
+    return api.orders().then(setOrders).catch((error) => setNotice(error.message));
+  }, [currentUser]);
+
+  const refreshSeller = useCallback(() => {
+    if (!currentUser || currentUser.role !== "seller") {
+      setSellerDashboard(null);
+      return Promise.resolve();
+    }
+    return api.sellerDashboard(currentUser.id).then(setSellerDashboard).catch((error) => setNotice(error.message));
+  }, [currentUser]);
+
+  const refreshAccountData = useCallback(async () => {
+    if (!currentUser || currentUser.role === "admin") {
+      resetProtectedState();
+      return;
+    }
+    const results = await Promise.allSettled([
+      api.cart(),
+      api.wishlist(),
+      api.addresses(),
+      api.paymentMethods(),
+      api.recentlyViewed(),
+      api.recommendations(),
+      api.complaints(),
+      api.aiHistory(),
+    ]);
+    if (results[0].status === "fulfilled") setCart(results[0].value); else setCart(emptyCart);
+    if (results[1].status === "fulfilled") setWishlist(results[1].value.items); else setWishlist([]);
+    if (results[2].status === "fulfilled") setAddresses(results[2].value.items); else setAddresses([]);
+    if (results[3].status === "fulfilled") setPaymentMethods(results[3].value.items); else setPaymentMethods([]);
+    if (results[4].status === "fulfilled") setRecentlyViewed(results[4].value.items); else setRecentlyViewed([]);
+    if (results[5].status === "fulfilled") setRecommendations(results[5].value.items); else setRecommendations([]);
+    if (results[6].status === "fulfilled") setComplaints(results[6].value.items); else setComplaints([]);
+    if (results[7].status === "fulfilled" && results[7].value.items?.length) {
+      setChatMessages(results[7].value.items.map((item) => ({ role: item.role, content: item.content })));
+    } else {
+      setChatMessages(defaultChatMessages);
+    }
+  }, [currentUser, resetProtectedState]);
 
   useEffect(() => {
-    api.users().then(setUsers).catch((e) => setNotice(e.message));
-    api.categories().then(setCategories).catch((e) => setNotice(e.message));
-    api.cart().then(setCart).catch(() => setCart(emptyCart));
-    api.wishlist().then((p) => setWishlist(p.items)).catch(() => setWishlist([]));
-    refreshOrders(); refreshSeller();
+    api.categories().then(setCategories).catch((error) => setNotice(error.message));
+    api.hydrateToken();
+    if (!api.hasToken()) {
+      setAuthReady(true);
+      return;
+    }
+    api.me()
+      .then((user) => {
+        setAuthUser(user);
+        setPage(user.role === "admin" ? "admin" : user.role === "seller" ? "seller" : "home");
+      })
+      .catch(() => {
+        api.clearToken();
+        setAuthUser(null);
+      })
+      .finally(() => setAuthReady(true));
   }, []);
 
   useEffect(() => {
-    setLoading(true);
-    const t = setTimeout(() => {
-      api.products({ search:query, category:filters.category, max_price:filters.max_price, min_rating:filters.min_rating })
-        .then(setProducts).catch((e) => setNotice(e.message)).finally(() => setLoading(false));
-    }, 250);
-    return () => clearTimeout(t);
-  }, [query, filters]);
+    if (typeof window === "undefined") return undefined;
+    const handleAuthExpired = (event) => {
+      setAuthUser(null);
+      resetProtectedState();
+      setChatOpen(false);
+      setPage((current) => (["cart", "checkout", "payment", "orders", "account", "seller", "admin", "confirmation"].includes(current) ? "auth" : current));
+      setNotice(event.detail?.message || "Session expired. Please login again.");
+      setAuthReady(true);
+    };
+    window.addEventListener(AUTH_EXPIRED_EVENT, handleAuthExpired);
+    return () => window.removeEventListener(AUTH_EXPIRED_EVENT, handleAuthExpired);
+  }, [resetProtectedState]);
 
   useEffect(() => {
-    if (activeRole === "seller") setPage("seller");
-    if (activeRole === "buyer" && page === "seller") setPage("home");
-  }, [activeRole]);
+    if (!authReady) return;
+    if (!currentUser) {
+      resetProtectedState();
+      return;
+    }
+    refreshAccountData();
+    if (currentUser.role === "seller") refreshSeller();
+    if (currentUser.role === "buyer") refreshOrders();
+  }, [authReady, currentUser, refreshAccountData, refreshOrders, refreshSeller, resetProtectedState]);
 
-  const go = (nextPage) => {
+  useEffect(() => {
+    setLoading(true);
+    const timer = setTimeout(() => {
+      api.products({ search: query, category: filters.category, max_price: filters.max_price, min_rating: filters.min_rating })
+        .then(setProducts)
+        .catch((error) => setNotice(error.message))
+        .finally(() => setLoading(false));
+    }, 250);
+    return () => clearTimeout(timer);
+  }, [query, filters]);
+
+  const go = useCallback((nextPage) => {
+    if (nextPage === "payment" && !checkoutAddress) {
+      setNotice("Please add a delivery address first");
+      setPage("checkout");
+      return;
+    }
+    if (["account", "cart", "checkout", "payment", "orders"].includes(nextPage) && !ensureCustomerAccess()) return;
+    if (nextPage === "seller") {
+      if (!currentUser) {
+        setNotice("Please login as a seller");
+        setPage("auth");
+        return;
+      }
+      if (currentUser.role !== "seller") {
+        setNotice("Seller access required");
+        return;
+      }
+      refreshSeller();
+    }
+    if (nextPage === "admin") {
+      if (!currentUser) {
+        setNotice("Please login as admin");
+        setPage("auth");
+        return;
+      }
+      if (currentUser.role !== "admin") {
+        setNotice("Admin access required");
+        return;
+      }
+    }
     if (nextPage === "orders") refreshOrders();
-    if (nextPage === "seller") refreshSeller();
-    if (nextPage === "payment" && !checkoutAddress) { setNotice("Please add delivery address first"); setPage("checkout"); return; }
+    if (nextPage === "account") refreshAccountData();
     setPage(nextPage);
-  };
+  }, [checkoutAddress, currentUser, ensureCustomerAccess, refreshAccountData, refreshOrders, refreshSeller]);
 
   const openProduct = async (id) => {
-    try { setSelectedProduct(await api.product(id)); setProductReviews(await api.reviews(id)); setPage("detail"); }
-    catch(e) { setNotice(e.message); }
+    try {
+      const product = await api.product(id);
+      setSelectedProduct(product);
+      setProductReviews(await api.reviews(id));
+      if (currentUser && currentUser.role !== "admin") {
+        const viewed = await api.recentlyViewed().catch(() => null);
+        if (viewed) setRecentlyViewed(viewed.items);
+        const recs = await api.recommendations().catch(() => null);
+        if (recs) setRecommendations(recs.items);
+      }
+      setPage("detail");
+    } catch (error) {
+      setNotice(error.message);
+    }
   };
 
   const addToCart = async (productId) => {
-    try { setCart(await api.addToCart(productId)); setNotice("Added to cart"); }
-    catch(e) { setNotice(e.message); }
+    if (!ensureCustomerAccess()) return;
+    try {
+      setCart(await api.addToCart(productId));
+      setNotice("Added to cart");
+    } catch (error) {
+      setNotice(error.message);
+    }
   };
 
   const buyNow = async (productId) => {
-    try { setCart(await api.addToCart(productId)); setPage("checkout"); }
-    catch(e) { setNotice(e.message); }
+    if (!ensureCustomerAccess()) return;
+    try {
+      setCart(await api.addToCart(productId));
+      setPage("checkout");
+    } catch (error) {
+      setNotice(error.message);
+    }
+  };
+
+  const updateCartLine = async (itemId, quantity) => {
+    try {
+      setCart(await api.updateCart(itemId, quantity));
+    } catch (error) {
+      setNotice(error.message);
+    }
+  };
+
+  const removeCartLine = async (itemId) => {
+    try {
+      setCart(await api.removeCart(itemId));
+    } catch (error) {
+      setNotice(error.message);
+    }
   };
 
   const placeOrder = async (payment) => {
+    if (!ensureCustomerAccess()) return;
     try {
-      if (!checkoutAddress) { setNotice("Please add delivery address first"); setPage("checkout"); return; }
+      if (!checkoutAddress) {
+        setNotice("Please add a delivery address first");
+        setPage("checkout");
+        return;
+      }
       const placed = await api.placeOrder({ address: checkoutAddress, payment });
-      setOrder(placed); setCart(emptyCart); setCheckoutAddress(null);
-      refreshOrders(); refreshSeller(); setPage("confirmation");
-    } catch(e) { setNotice(e.message); }
+      setOrder(placed);
+      setCart(emptyCart);
+      setCheckoutAddress(null);
+      await refreshOrders();
+      await refreshAccountData();
+      setPage("confirmation");
+    } catch (error) {
+      setNotice(error.message);
+    }
   };
 
-  const login = async (payload) => {
+  const completeAuth = useCallback((result, successMessage) => {
+    resetProtectedState();
+    setChatOpen(false);
+    setAuthUser(result.user);
+    setNotice(successMessage);
+    setPage(result.user.role === "admin" ? "admin" : result.user.role === "seller" ? "seller" : "home");
+  }, [resetProtectedState]);
+
+  const login = useCallback(async (payload) => {
     try {
-      const result = await api.login({ email:payload.email, password:payload.password });
-      setAuthUser(result.user);
-      if (result.user.role === "admin") { setNotice("Welcome, Admin!"); setPage("admin"); }
-      else { setNotice("Logged in"); setPage("home"); }
-    } catch(e) { setNotice(e.message); }
-  };
+      const result = await api.login({ email: payload.email, password: payload.password });
+      api.setToken(result.token);
+      completeAuth(result, result.user.role === "admin" ? "Welcome, Admin!" : "Logged in");
+    } catch (error) {
+      setNotice(error.message);
+    }
+  }, [completeAuth]);
 
-  const signup = async (payload) => {
+  const signup = useCallback(async (payload) => {
     try {
       const result = await api.signup(payload);
-      setAuthUser(result.user);
-      setUsers((c) => [result.user, ...c.filter((u) => u.id !== result.user.id)]);
-      setNotice("Account created"); setPage("home");
-    } catch(e) { setNotice(e.message); }
-  };
+      api.setToken(result.token);
+      completeAuth(result, "Account created");
+    } catch (error) {
+      setNotice(error.message);
+    }
+  }, [completeAuth]);
 
-  const googleLogin = async (payload) => {
+  const googleLogin = useCallback(async (payload) => {
     try {
       const result = await api.googleLogin(payload);
-      setAuthUser(result.user); setNotice("Signed in with Google demo"); setPage("home");
-    } catch(e) { setNotice(e.message); }
+      api.setToken(result.token);
+      completeAuth(result, "Signed in with Google");
+    } catch (error) {
+      setNotice(error.message);
+    }
+  }, [completeAuth]);
+
+  const logoutUser = async () => {
+    try {
+      if (api.hasToken()) await api.logout();
+    } catch (_) {
+      // noop
+    }
+    api.clearToken();
+    setAuthUser(null);
+    resetProtectedState();
+    setPage("home");
+    setNotice("Logged out");
   };
 
   const toggleWishlist = async (productId) => {
-    try { const p = await api.toggleWishlist(productId); setWishlist(p.items); }
-    catch(e) { setNotice(e.message); }
+    if (!ensureCustomerAccess()) return;
+    try {
+      const payload = await api.toggleWishlist(productId);
+      setWishlist(payload.items);
+    } catch (error) {
+      setNotice(error.message);
+    }
   };
 
   const addReview = async (payload) => {
-    try { await api.addReview(payload); setProductReviews(await api.reviews(payload.product_id)); setNotice("Review submitted"); }
-    catch(e) { setNotice(e.message); }
+    if (!ensureCustomerAccess("Please login to submit a review")) return;
+    try {
+      await api.addReview(payload);
+      setProductReviews(await api.reviews(payload.product_id));
+      setNotice("Review submitted");
+    } catch (error) {
+      setNotice(error.message);
+    }
+  };
+
+  const updateProfile = async (payload) => {
+    try {
+      await api.updateProfile(payload);
+      await refreshProfile();
+      setNotice("Profile updated");
+    } catch (error) {
+      setNotice(error.message);
+    }
+  };
+
+  const saveAddress = async (payload) => {
+    try {
+      const response = await api.addAddress(payload);
+      setAddresses(response.items);
+      await refreshProfile();
+      setNotice("Address saved");
+      return response.items;
+    } catch (error) {
+      setNotice(error.message);
+      throw error;
+    }
+  };
+
+  const updateAddress = async (addressId, payload) => {
+    try {
+      const response = await api.updateAddress(addressId, payload);
+      setAddresses(response.items);
+      await refreshProfile();
+      setNotice("Address updated");
+    } catch (error) {
+      setNotice(error.message);
+    }
+  };
+
+  const deleteAddress = async (addressId) => {
+    try {
+      const response = await api.deleteAddress(addressId);
+      setAddresses(response.items);
+      await refreshProfile();
+      setNotice("Address deleted");
+    } catch (error) {
+      setNotice(error.message);
+    }
+  };
+
+  const savePaymentMethod = async (payload) => {
+    try {
+      const response = await api.addPaymentMethod(payload);
+      setPaymentMethods(response.items);
+      setNotice("Payment method saved");
+      return response.items;
+    } catch (error) {
+      setNotice(error.message);
+      throw error;
+    }
+  };
+
+  const deletePaymentMethod = async (paymentId) => {
+    try {
+      const response = await api.deletePaymentMethod(paymentId);
+      setPaymentMethods(response.items);
+      setNotice("Payment method deleted");
+    } catch (error) {
+      setNotice(error.message);
+    }
+  };
+
+  const submitComplaint = async (payload) => {
+    try {
+      await api.addComplaint(payload);
+      const response = await api.complaints();
+      setComplaints(response.items);
+      setNotice("Complaint submitted");
+    } catch (error) {
+      setNotice(error.message);
+    }
+  };
+
+  const reorderOrder = async (orderNumber) => {
+    try {
+      setCart(await api.reorder(orderNumber));
+      setPage("cart");
+      setNotice("Order moved to cart");
+    } catch (error) {
+      setNotice(error.message);
+    }
+  };
+
+  const saveSellerProduct = async (productId, payload) => {
+    try {
+      if (productId) await api.updateSellerProduct(productId, payload);
+      else await api.createSellerProduct(payload);
+      await refreshSeller();
+      setNotice(productId ? "Product updated" : "Product created and sent for approval");
+    } catch (error) {
+      setNotice(error.message);
+      throw error;
+    }
+  };
+
+  const deleteSellerProduct = async (productId) => {
+    try {
+      await api.deleteSellerProduct(productId);
+      await refreshSeller();
+      setNotice("Product deleted");
+    } catch (error) {
+      setNotice(error.message);
+    }
+  };
+
+  const updateSellerOrderItemStatus = async (orderId, itemId, status) => {
+    try {
+      await api.updateSellerOrderItemStatus(orderId, itemId, status);
+      await refreshSeller();
+      setNotice("Order item updated");
+    } catch (error) {
+      setNotice(error.message);
+    }
+  };
+
+  const respondToReview = async (reviewId, response) => {
+    try {
+      await api.respondToReview(reviewId, response);
+      await refreshSeller();
+      setNotice("Review response saved");
+    } catch (error) {
+      setNotice(error.message);
+    }
   };
 
   const sendChatMessage = async (message) => {
@@ -870,10 +2083,7 @@ export default function App() {
     setChatMessages(nextMessages);
     setChatLoading(true);
     try {
-      const result = await api.aiChat({
-        message,
-        history: nextMessages.slice(-10).map((item) => ({ role: item.role, content: item.content })),
-      });
+      const result = await api.aiChat({ message, history: nextMessages.slice(-10).map((item) => ({ role: item.role, content: item.content })) });
       setChatMessages((current) => [...current, { role: "assistant", content: result.reply }]);
       setChatOpen(true);
     } catch (error) {
@@ -885,22 +2095,37 @@ export default function App() {
     }
   };
 
+  const clearChatHistory = async () => {
+    if (!currentUser || currentUser.role === "admin") {
+      setChatMessages(defaultChatMessages);
+      setNotice("Local chat cleared");
+      return;
+    }
+    try {
+      await api.clearAiHistory();
+      setChatMessages(defaultChatMessages);
+      setNotice("Chat history cleared");
+    } catch (error) {
+      setNotice(error.message);
+    }
+  };
+
   return (
     <ErrorBoundary>
-      <Header query={query} setQuery={setQuery} cartCount={cartCount} page={page} go={go}
-        activeRole={activeRole} setActiveRole={setActiveRole} currentUser={currentUser} />
-      {notice && <button className="toast" onClick={() => setNotice("")}>{notice} ✕</button>}
-      {page==="auth"         && <AuthPage login={login} signup={signup} googleLogin={googleLogin} />}
-      {page==="home"         && <HomePage products={products} categories={categories} filters={filters} setFilters={setFilters} openProduct={openProduct} loading={loading} buyer={buyer} wishlistIds={wishlist.map((i)=>i.id)} toggleWishlist={toggleWishlist} />}
-      {(page==="buyer"||page==="orders") && <OrdersPage orders={orders} buyer={buyer} go={go} />}
-      {page==="seller"       && <SellerPage dashboard={sellerDashboard} />}
-      {page==="admin"        && <AdminPage setNotice={setNotice} />}
-      {page==="detail"       && <ProductDetail product={selectedProduct} onBack={() => setPage("home")} addToCart={addToCart} buyNow={buyNow} reviews={productReviews} addReview={addReview} />}
-      {page==="cart"         && <CartPage cart={cart} updateCart={(id,qty)=>api.updateCart(id,qty).then(setCart)} removeCart={(id)=>api.removeCart(id).then(setCart)} go={go} />}
-      {page==="checkout"     && <CheckoutPage cart={cart} buyer={buyer} setCheckoutAddress={setCheckoutAddress} go={go} />}
-      {page==="payment"      && <PaymentPage cart={cart} checkoutAddress={checkoutAddress} placeOrder={placeOrder} go={go} setNotice={setNotice} />}
-      {page==="confirmation" && <ConfirmationPage order={order} go={go} />}
-      <AIChatWidget open={chatOpen} setOpen={setChatOpen} messages={chatMessages} sendMessage={sendChatMessage} loading={chatLoading} />
+      <Header query={query} setQuery={setQuery} cartCount={cartCount} currentUser={currentUser} go={go} logout={logoutUser} />
+      {notice && <button className="toast" onClick={() => setNotice("")}>{notice} x</button>}
+      {page === "auth" && <AuthPage login={login} signup={signup} googleLogin={googleLogin} />}
+      {page === "home" && <HomePage products={products} categories={categories} filters={filters} setFilters={setFilters} openProduct={openProduct} loading={loading} buyer={currentUser && currentUser.role !== "admin" ? currentUser : null} wishlistIds={wishlist.map((item) => item.id)} toggleWishlist={toggleWishlist} recommendations={recommendations} recentlyViewed={recentlyViewed} />}
+      {page === "detail" && <ProductDetail product={selectedProduct} onBack={() => setPage("home")} addToCart={addToCart} buyNow={buyNow} reviews={productReviews} addReview={addReview} />}
+      {page === "cart" && <CartPage cart={cart} updateCart={updateCartLine} removeCart={removeCartLine} go={go} />}
+      {page === "checkout" && <CheckoutPage cart={cart} buyer={currentUser} addresses={addresses} setCheckoutAddress={setCheckoutAddress} go={go} saveAddress={saveAddress} />}
+      {page === "payment" && <PaymentPage cart={cart} checkoutAddress={checkoutAddress} paymentMethods={paymentMethods} savePaymentMethod={savePaymentMethod} placeOrder={placeOrder} go={go} setNotice={setNotice} />}
+      {page === "orders" && <OrdersPage orders={orders} buyer={currentUser} go={go} reorderOrder={reorderOrder} submitComplaint={submitComplaint} />}
+      {page === "account" && <AccountPage user={currentUser} updateProfile={updateProfile} addresses={addresses} saveAddress={saveAddress} updateAddress={updateAddress} deleteAddress={deleteAddress} paymentMethods={paymentMethods} savePaymentMethod={savePaymentMethod} deletePaymentMethod={deletePaymentMethod} recentlyViewed={recentlyViewed} recommendations={recommendations} complaints={complaints} submitComplaint={submitComplaint} openProduct={openProduct} wishlistIds={wishlist.map((item) => item.id)} toggleWishlist={toggleWishlist} />}
+      {page === "seller" && <SellerPage dashboard={sellerDashboard} categories={categories} saveSellerProduct={saveSellerProduct} deleteSellerProduct={deleteSellerProduct} updateSellerOrderItemStatus={updateSellerOrderItemStatus} respondToReview={respondToReview} />}
+      {page === "admin" && <AdminPage setNotice={setNotice} />}
+      {page === "confirmation" && <ConfirmationPage order={order} go={go} />}
+      <AIChatWidget open={chatOpen} setOpen={setChatOpen} messages={chatMessages} sendMessage={sendChatMessage} clearHistory={clearChatHistory} loading={chatLoading} />
     </ErrorBoundary>
   );
 }
