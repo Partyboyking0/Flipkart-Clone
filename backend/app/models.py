@@ -113,6 +113,7 @@ class Order(Base):
     payment_method: Mapped[str] = mapped_column(String(40), default="UPI")
     payment_status: Mapped[str] = mapped_column(String(40), default="PAID")
     payment_reference: Mapped[str] = mapped_column(String(80), default="")
+    razorpay_order_id: Mapped[str] = mapped_column(String(80), default="")
     status: Mapped[str] = mapped_column(String(40), default="PLACED")
     tracking_status: Mapped[str] = mapped_column(String(80), default="Order placed")
     created_at: Mapped[DateTime] = mapped_column(DateTime, server_default=func.now())

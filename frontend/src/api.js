@@ -18,12 +18,15 @@ async function request(path, options = {}) {
 }
 
 export const api = {
+  // Auth
   signup: (payload) =>
     request("/api/auth/signup", { method: "POST", body: JSON.stringify(payload) }),
   login: (payload) =>
     request("/api/auth/login", { method: "POST", body: JSON.stringify(payload) }),
   googleLogin: (payload) =>
     request("/api/auth/oauth/google", { method: "POST", body: JSON.stringify(payload) }),
+
+  // Catalog
   categories: () => request("/api/categories"),
   users: () => request("/api/users"),
   user: (id) => request(`/api/users/${id}`),
@@ -36,28 +39,40 @@ export const api = {
     return request(`/api/products${query ? `?${query}` : ""}`);
   },
   product: (id) => request(`/api/products/${id}`),
+
+  // Cart
   cart: () => request("/api/cart"),
   addToCart: (productId, quantity = 1) =>
-    request("/api/cart", {
-      method: "POST",
-      body: JSON.stringify({ product_id: productId, quantity }),
-    }),
+    request("/api/cart", { method: "POST", body: JSON.stringify({ product_id: productId, quantity }) }),
   updateCart: (itemId, quantity) =>
-    request(`/api/cart/${itemId}`, {
-      method: "PATCH",
-      body: JSON.stringify({ quantity }),
-    }),
+    request(`/api/cart/${itemId}`, { method: "PATCH", body: JSON.stringify({ quantity }) }),
   removeCart: (itemId) => request(`/api/cart/${itemId}`, { method: "DELETE" }),
+
+  // Wishlist
   wishlist: () => request("/api/wishlist"),
   toggleWishlist: (productId) => request(`/api/wishlist/${productId}`, { method: "POST" }),
+
+  // Reviews
   reviews: (productId) => request(`/api/products/${productId}/reviews`),
   addReview: (payload) =>
     request("/api/reviews", { method: "POST", body: JSON.stringify(payload) }),
+
+  // Orders
   placeOrder: (payload) =>
-    request("/api/orders", {
-      method: "POST",
-      body: JSON.stringify(payload),
-    }),
+    request("/api/orders", { method: "POST", body: JSON.stringify(payload) }),
   orders: () => request("/api/orders"),
+  order: (orderNumber) => request(`/api/orders/${orderNumber}`),
+
+  // Seller
   sellerDashboard: (sellerId) => request(`/api/seller/${sellerId}/dashboard`),
+
+  // Razorpay
+  razorpayCreateOrder: () => request("/api/razorpay/create-order", { method: "POST" }),
+  razorpayVerify: (payload) =>
+    request("/api/razorpay/verify", { method: "POST", body: JSON.stringify(payload) }),
+
+  // Admin
+  adminDashboard: () => request("/api/admin/dashboard"),
+  adminDeleteUser: (userId) => request(`/api/admin/users/${userId}`, { method: "DELETE" }),
+  adminDeleteProduct: (productId) => request(`/api/admin/products/${productId}`, { method: "DELETE" }),
 };

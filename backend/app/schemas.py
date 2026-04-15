@@ -5,7 +5,6 @@ class CategoryOut(BaseModel):
     id: int
     name: str
     slug: str
-
     model_config = {"from_attributes": True}
 
 
@@ -13,7 +12,6 @@ class ProductImageOut(BaseModel):
     id: int
     url: str
     alt: str
-
     model_config = {"from_attributes": True}
 
 
@@ -21,7 +19,6 @@ class ProductSpecOut(BaseModel):
     id: int
     name: str
     value: str
-
     model_config = {"from_attributes": True}
 
 
@@ -37,7 +34,6 @@ class UserOut(BaseModel):
     state: str
     pincode: str
     store_name: str
-
     model_config = {"from_attributes": True}
 
 
@@ -56,7 +52,6 @@ class ProductOut(BaseModel):
     category: CategoryOut
     images: list[ProductImageOut]
     specs: list[ProductSpecOut]
-
     model_config = {"from_attributes": True}
 
 
@@ -94,7 +89,6 @@ class CartLineOut(BaseModel):
     id: int
     quantity: int
     product: ProductOut
-
     model_config = {"from_attributes": True}
 
 
@@ -129,8 +123,10 @@ class PaymentIn(BaseModel):
     payer_name: str = Field(min_length=2, max_length=160)
     upi_id: str | None = Field(default=None, max_length=120)
     card_last4: str | None = Field(default=None, max_length=4)
+    payment_reference: str | None = Field(default=None, max_length=120)
+    razorpay_order_id: str | None = Field(default=None, max_length=120)
 
-    @field_validator("upi_id", "card_last4", mode="before")
+    @field_validator("upi_id", "card_last4", "payment_reference", "razorpay_order_id", mode="before")
     @classmethod
     def blank_to_none(cls, value):
         if value == "":
@@ -139,8 +135,8 @@ class PaymentIn(BaseModel):
 
     @model_validator(mode="after")
     def validate_method_details(self):
-        if self.method in {"UPI", "RAZORPAY"} and not self.upi_id:
-            raise ValueError("UPI ID is required for UPI/Razorpay payment")
+        if self.method == "UPI" and not self.upi_id:
+            raise ValueError("UPI ID is required for UPI payment")
         if self.method == "CARD" and (not self.card_last4 or len(self.card_last4) != 4):
             raise ValueError("Last 4 card digits are required for card payment")
         return self
@@ -158,7 +154,6 @@ class OrderItemOut(BaseModel):
     price: float
     quantity: int
     seller_id: int
-
     model_config = {"from_attributes": True}
 
 
@@ -179,10 +174,24 @@ class OrderOut(BaseModel):
     status: str
     tracking_status: str
     items: list[OrderItemOut]
-
     model_config = {"from_attributes": True}
 
 
+# ── Razorpay schemas ──────────────────────────────────────────────────────────
+class RazorpayOrderOut(BaseModel):
+    razorpay_order_id: str
+    amount: int          # in paise
+    currency: str
+    key_id: str
+
+
+class RazorpayVerifyIn(BaseModel):
+    razorpay_order_id: str
+    razorpay_payment_id: str
+    razorpay_signature: str
+
+
+# ── Seller schemas ────────────────────────────────────────────────────────────
 class SellerStatsOut(BaseModel):
     product_count: int
     units_sold: int
@@ -197,6 +206,24 @@ class SellerDashboardOut(BaseModel):
     stats: SellerStatsOut
 
 
+# ── Admin schemas ─────────────────────────────────────────────────────────────
+class AdminStatsOut(BaseModel):
+    total_users: int
+    total_products: int
+    total_orders: int
+    total_revenue: float
+    paid_orders: int
+    pending_orders: int
+
+
+class AdminDashboardOut(BaseModel):
+    stats: AdminStatsOut
+    users: list[UserOut]
+    products: list[ProductOut]
+    orders: list[OrderOut]
+
+
+# ── Review schemas ────────────────────────────────────────────────────────────
 class ReviewIn(BaseModel):
     product_id: int
     rating: int = Field(ge=1, le=5)
@@ -211,5 +238,4 @@ class ReviewOut(BaseModel):
     comment: str
     verified_purchase: bool
     user: UserOut
-
     model_config = {"from_attributes": True}

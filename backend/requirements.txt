@@ -1,9 +1,42 @@
-fastapi
-uvicorn[standard]
-SQLAlchemy
-PyMySQL
-pydantic
-python-dotenv
-Flask
-flask-cors
-requests
+# =========================
+# Core Backend
+# =========================
+fastapi==0.115.0
+uvicorn[standard]==0.30.6
+
+# =========================
+# Database
+# =========================
+sqlalchemy==2.0.36
+pymysql==1.1.1
+cryptography==43.0.3
+greenlet==3.0.3
+
+# =========================
+# Validation
+# =========================
+pydantic==2.9.2
+email-validator==2.2.0
+
+# =========================
+# Authentication
+# =========================
+passlib[bcrypt]==1.7.4
+python-jose==3.3.0
+
+# =========================
+# Payments
+# =========================
+razorpay==1.4.2
+
+# =========================
+# Utilities
+# =========================
+requests==2.32.3
+python-dotenv==1.0.1
+
+# =========================
+# Optional (only if used)
+# =========================
+flask==3.0.3
+flask-cors==4.0.1

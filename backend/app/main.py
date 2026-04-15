@@ -1,8 +1,15 @@
 import os
+import smtplib
+import hmac
+import hashlib
+from email.mime.multipart import MIMEMultipart
+from email.mime.text import MIMEText
 from hashlib import sha256
 from uuid import uuid4
 
+import razorpay
 import requests
+from dotenv import load_dotenv
 from fastapi import Depends, FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy import text, select
@@ -24,6 +31,10 @@ from .schemas import (
     ProductOut,
     ReviewIn,
     ReviewOut,
+    RazorpayOrderOut,
+    RazorpayVerifyIn,
+    AdminStatsOut,
+    AdminDashboardOut,
     SellerDashboardOut,
     SellerStatsOut,
     SignupIn,
@@ -31,9 +42,11 @@ from .schemas import (
     WishlistOut,
 )
 
+load_dotenv()
+
 Base.metadata.create_all(bind=engine)
 
-app = FastAPI(title="Flipkart Clone API", version="1.0.0")
+app = FastAPI(title="Flipkart Clone API", version="2.0.0")
 
 app.add_middleware(
     CORSMiddleware,
@@ -45,9 +58,24 @@ app.add_middleware(
 
 DEFAULT_USER_ID = 1
 DEFAULT_SELLER_ID = 2
-FLASK_NOTIFICATION_URL = os.getenv("FLASK_NOTIFICATION_URL", "http://localhost:5001/notifications/order")
+
+# ── Razorpay client ──────────────────────────────────────────────────────────
+RAZORPAY_KEY_ID = os.getenv("RAZORPAY_KEY_ID", "")
+RAZORPAY_KEY_SECRET = os.getenv("RAZORPAY_KEY_SECRET", "")
+rzp_client = razorpay.Client(auth=(RAZORPAY_KEY_ID, RAZORPAY_KEY_SECRET)) if RAZORPAY_KEY_ID else None
+
+# ── Gmail SMTP ────────────────────────────────────────────────────────────────
+EMAIL_HOST = os.getenv("EMAIL_HOST", "smtp.gmail.com")
+EMAIL_PORT = int(os.getenv("EMAIL_PORT", 587))
+EMAIL_USER = os.getenv("EMAIL_USER", "")
+EMAIL_PASSWORD = os.getenv("EMAIL_PASSWORD", "")
+
+# ── Admin credentials ─────────────────────────────────────────────────────────
+ADMIN_EMAIL = os.getenv("ADMIN_EMAIL", "admin@flipkart.com")
+ADMIN_PASSWORD = os.getenv("ADMIN_PASSWORD", "admin123")
 
 
+# ── Runtime schema migrations ─────────────────────────────────────────────────
 def ensure_runtime_schema():
     statements = [
         "CREATE TABLE IF NOT EXISTS users (id INT AUTO_INCREMENT PRIMARY KEY, name VARCHAR(160) NOT NULL, email VARCHAR(180) NOT NULL UNIQUE, phone VARCHAR(20) NOT NULL, role VARCHAR(20) NOT NULL, address_line VARCHAR(255) DEFAULT '', city VARCHAR(100) DEFAULT '', state VARCHAR(100) DEFAULT '', pincode VARCHAR(12) DEFAULT '', store_name VARCHAR(160) DEFAULT '')",
@@ -58,6 +86,7 @@ def ensure_runtime_schema():
         "ALTER TABLE orders ADD COLUMN payment_status VARCHAR(40) DEFAULT 'PAID'",
         "ALTER TABLE orders ADD COLUMN payment_reference VARCHAR(80) DEFAULT ''",
         "ALTER TABLE orders ADD COLUMN tracking_status VARCHAR(80) DEFAULT 'Order placed'",
+        "ALTER TABLE orders ADD COLUMN razorpay_order_id VARCHAR(80) DEFAULT ''",
         "ALTER TABLE order_items ADD COLUMN seller_id INT DEFAULT 2",
         "CREATE TABLE IF NOT EXISTS wishlist_items (id INT AUTO_INCREMENT PRIMARY KEY, user_id INT DEFAULT 1, product_id INT NOT NULL, created_at DATETIME DEFAULT CURRENT_TIMESTAMP, INDEX ix_wishlist_user (user_id), CONSTRAINT fk_wishlist_products FOREIGN KEY (product_id) REFERENCES products(id))",
         "CREATE TABLE IF NOT EXISTS reviews (id INT AUTO_INCREMENT PRIMARY KEY, user_id INT DEFAULT 1, product_id INT NOT NULL, rating INT NOT NULL, comment TEXT NOT NULL, verified_purchase BOOLEAN DEFAULT FALSE, created_at DATETIME DEFAULT CURRENT_TIMESTAMP, INDEX ix_reviews_product (product_id), CONSTRAINT fk_reviews_products FOREIGN KEY (product_id) REFERENCES products(id))",
@@ -75,6 +104,7 @@ def ensure_runtime_schema():
 ensure_runtime_schema()
 
 
+# ── Helpers ───────────────────────────────────────────────────────────────────
 def product_options():
     return selectinload(Product.category), selectinload(Product.images), selectinload(Product.specs)
 
@@ -107,11 +137,6 @@ def load_cart(db: Session, user_id: int = DEFAULT_USER_ID) -> list[CartItem]:
     )
 
 
-@app.get("/api/health")
-def health():
-    return {"status": "ok", "service": "fastapi"}
-
-
 def hash_password(password: str) -> str:
     return sha256(password.encode("utf-8")).hexdigest()
 
@@ -120,6 +145,76 @@ def token_for(user: User) -> str:
     return f"demo-token-{user.id}-{uuid4().hex[:8]}"
 
 
+# ── Email helper ──────────────────────────────────────────────────────────────
+def send_order_email(to_email: str, order_number: str, customer_name: str, total: float, items: list, payment_method: str):
+    """Send order confirmation email via Gmail SMTP."""
+    if not EMAIL_USER or not EMAIL_PASSWORD:
+        print("[Email] Skipped — EMAIL_USER or EMAIL_PASSWORD not set in .env")
+        return
+
+    items_html = "".join(
+        f"<tr><td style='padding:6px 12px'>{item.title}</td><td style='padding:6px 12px;text-align:center'>{item.quantity}</td><td style='padding:6px 12px;text-align:right'>₹{item.price * item.quantity:,.0f}</td></tr>"
+        for item in items
+    )
+
+    html = f"""
+    <html><body style='font-family:Arial,sans-serif;color:#333;max-width:600px;margin:0 auto'>
+      <div style='background:#2874f0;padding:20px;text-align:center'>
+        <h1 style='color:#fff;margin:0'>Flipkart</h1>
+      </div>
+      <div style='padding:24px'>
+        <h2>Hi {customer_name}, your order is confirmed! 🎉</h2>
+        <p>Order ID: <strong>{order_number}</strong></p>
+        <p>Payment: <strong>{payment_method}</strong></p>
+        <table style='width:100%;border-collapse:collapse;margin:16px 0'>
+          <thead>
+            <tr style='background:#f5f5f5'>
+              <th style='padding:8px 12px;text-align:left'>Product</th>
+              <th style='padding:8px 12px'>Qty</th>
+              <th style='padding:8px 12px;text-align:right'>Amount</th>
+            </tr>
+          </thead>
+          <tbody>{items_html}</tbody>
+        </table>
+        <div style='text-align:right;font-size:18px;font-weight:bold;border-top:2px solid #f0f0f0;padding-top:12px'>
+          Total: ₹{total:,.0f}
+        </div>
+        <p style='color:#388e3c;margin-top:20px'>📦 Your order has been placed and will be delivered soon.</p>
+      </div>
+      <div style='background:#f5f5f5;padding:12px;text-align:center;font-size:12px;color:#878787'>
+        Flipkart Clone &mdash; Built with FastAPI & React
+      </div>
+    </body></html>
+    """
+
+    msg = MIMEMultipart("alternative")
+    msg["Subject"] = f"Order Confirmed: {order_number} | Flipkart"
+    msg["From"] = EMAIL_USER
+    msg["To"] = to_email
+    msg.attach(MIMEText(html, "html"))
+
+    try:
+        with smtplib.SMTP(EMAIL_HOST, EMAIL_PORT) as server:
+            server.ehlo()
+            server.starttls()
+            server.login(EMAIL_USER, EMAIL_PASSWORD)
+            server.sendmail(EMAIL_USER, to_email, msg.as_string())
+        print(f"[Email] Order confirmation sent to {to_email}")
+    except Exception as exc:
+        print(f"[Email] Failed to send email: {exc}")
+
+
+# ── Health ────────────────────────────────────────────────────────────────────
+@app.get("/api/health")
+def health():
+    return {
+        "status": "ok",
+        "razorpay": "configured" if rzp_client else "not configured (add keys to .env)",
+        "email": "configured" if EMAIL_USER else "not configured (add Gmail to .env)",
+    }
+
+
+# ── Auth ──────────────────────────────────────────────────────────────────────
 @app.post("/api/auth/signup", response_model=AuthOut)
 def signup(payload: SignupIn, db: Session = Depends(get_db)):
     existing = db.scalar(select(User).where(User.email == payload.email))
@@ -141,6 +236,10 @@ def signup(payload: SignupIn, db: Session = Depends(get_db)):
 
 @app.post("/api/auth/login", response_model=AuthOut)
 def login(payload: AuthIn, db: Session = Depends(get_db)):
+    # Admin login
+    if payload.email == ADMIN_EMAIL and payload.password == ADMIN_PASSWORD:
+        admin_user = User(id=0, name="Admin", email=ADMIN_EMAIL, phone="0000000000", role="admin", password_hash="", oauth_provider="", address_line="", city="", state="", pincode="", store_name="Flipkart Admin")
+        return AuthOut(user=admin_user, token=f"admin-token-{uuid4().hex[:8]}")
     user = db.scalar(select(User).where(User.email == payload.email))
     if not user or user.password_hash != hash_password(payload.password):
         raise HTTPException(status_code=401, detail="Invalid email or password")
@@ -165,11 +264,13 @@ def google_oauth(payload: OAuthIn, db: Session = Depends(get_db)):
     return AuthOut(user=user, token=token_for(user))
 
 
+# ── Categories ────────────────────────────────────────────────────────────────
 @app.get("/api/categories", response_model=list[CategoryOut])
 def categories(db: Session = Depends(get_db)):
     return db.scalars(select(Category).order_by(Category.name)).all()
 
 
+# ── Users ─────────────────────────────────────────────────────────────────────
 @app.get("/api/users", response_model=list[UserOut])
 def users(db: Session = Depends(get_db)):
     return db.scalars(select(User).order_by(User.id)).all()
@@ -183,6 +284,7 @@ def user_detail(user_id: int, db: Session = Depends(get_db)):
     return user
 
 
+# ── Products ──────────────────────────────────────────────────────────────────
 @app.get("/api/products", response_model=list[ProductOut])
 def products(
     search: str | None = Query(default=None),
@@ -214,6 +316,7 @@ def product_detail(product_id: int, db: Session = Depends(get_db)):
     return product
 
 
+# ── Cart ──────────────────────────────────────────────────────────────────────
 @app.get("/api/cart", response_model=CartOut)
 def get_cart(db: Session = Depends(get_db)):
     items = load_cart(db)
@@ -227,12 +330,8 @@ def add_to_cart(payload: CartAdd, db: Session = Depends(get_db)):
         raise HTTPException(status_code=404, detail="Product not found")
     if product.stock <= 0:
         raise HTTPException(status_code=400, detail="Product is out of stock")
-
     item = db.scalar(
-        select(CartItem).where(
-            CartItem.user_id == DEFAULT_USER_ID,
-            CartItem.product_id == payload.product_id,
-        )
+        select(CartItem).where(CartItem.user_id == DEFAULT_USER_ID, CartItem.product_id == payload.product_id)
     )
     if item:
         item.quantity = min(item.quantity + payload.quantity, 10, product.stock)
@@ -246,9 +345,7 @@ def add_to_cart(payload: CartAdd, db: Session = Depends(get_db)):
 @app.patch("/api/cart/{item_id}", response_model=CartOut)
 def update_cart(item_id: int, payload: CartUpdate, db: Session = Depends(get_db)):
     item = db.scalar(
-        select(CartItem)
-        .where(CartItem.id == item_id, CartItem.user_id == DEFAULT_USER_ID)
-        .options(selectinload(CartItem.product))
+        select(CartItem).where(CartItem.id == item_id, CartItem.user_id == DEFAULT_USER_ID).options(selectinload(CartItem.product))
     )
     if not item:
         raise HTTPException(status_code=404, detail="Cart item not found")
@@ -269,6 +366,7 @@ def remove_cart_item(item_id: int, db: Session = Depends(get_db)):
     return CartOut(items=items, summary=cart_summary(items))
 
 
+# ── Wishlist ──────────────────────────────────────────────────────────────────
 @app.get("/api/wishlist", response_model=WishlistOut)
 def get_wishlist(db: Session = Depends(get_db)):
     rows = db.scalars(
@@ -289,10 +387,7 @@ def toggle_wishlist(product_id: int, db: Session = Depends(get_db)):
     if not product:
         raise HTTPException(status_code=404, detail="Product not found")
     row = db.scalar(
-        select(WishlistItem).where(
-            WishlistItem.user_id == DEFAULT_USER_ID,
-            WishlistItem.product_id == product_id,
-        )
+        select(WishlistItem).where(WishlistItem.user_id == DEFAULT_USER_ID, WishlistItem.product_id == product_id)
     )
     if row:
         db.delete(row)
@@ -302,13 +397,11 @@ def toggle_wishlist(product_id: int, db: Session = Depends(get_db)):
     return get_wishlist(db)
 
 
+# ── Reviews ───────────────────────────────────────────────────────────────────
 @app.get("/api/products/{product_id}/reviews", response_model=list[ReviewOut])
 def product_reviews(product_id: int, db: Session = Depends(get_db)):
     return db.scalars(
-        select(Review)
-        .where(Review.product_id == product_id)
-        .options(selectinload(Review.user))
-        .order_by(Review.id.desc())
+        select(Review).where(Review.product_id == product_id).options(selectinload(Review.user)).order_by(Review.id.desc())
     ).all()
 
 
@@ -318,12 +411,7 @@ def add_review(payload: ReviewIn, db: Session = Depends(get_db)):
     if not product:
         raise HTTPException(status_code=404, detail="Product not found")
     verified = db.scalar(
-        select(OrderItem)
-        .join(Order)
-        .where(
-            Order.user_id == DEFAULT_USER_ID,
-            OrderItem.product_id == payload.product_id,
-        )
+        select(OrderItem).join(Order).where(Order.user_id == DEFAULT_USER_ID, OrderItem.product_id == payload.product_id)
     ) is not None
     review = Review(
         user_id=DEFAULT_USER_ID,
@@ -338,6 +426,55 @@ def add_review(payload: ReviewIn, db: Session = Depends(get_db)):
     return db.scalar(select(Review).where(Review.id == review.id).options(selectinload(Review.user)))
 
 
+# ── Razorpay: Create Order ────────────────────────────────────────────────────
+@app.post("/api/razorpay/create-order", response_model=RazorpayOrderOut)
+def razorpay_create_order(db: Session = Depends(get_db)):
+    """Create a Razorpay order for the current cart total."""
+    if not rzp_client:
+        raise HTTPException(status_code=503, detail="Razorpay not configured. Add RAZORPAY_KEY_ID and RAZORPAY_KEY_SECRET to .env")
+
+    items = load_cart(db)
+    if not items:
+        raise HTTPException(status_code=400, detail="Cart is empty")
+
+    summary = cart_summary(items)
+    amount_paise = int(summary.total * 100)  # Razorpay expects paise
+
+    try:
+        rzp_order = rzp_client.order.create({
+            "amount": amount_paise,
+            "currency": "INR",
+            "receipt": f"receipt_{uuid4().hex[:10]}",
+            "payment_capture": 1,
+        })
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"Razorpay error: {str(exc)}")
+
+    return RazorpayOrderOut(
+        razorpay_order_id=rzp_order["id"],
+        amount=amount_paise,
+        currency="INR",
+        key_id=RAZORPAY_KEY_ID,
+    )
+
+
+# ── Razorpay: Verify Payment ──────────────────────────────────────────────────
+@app.post("/api/razorpay/verify")
+def razorpay_verify(payload: RazorpayVerifyIn):
+    """Verify Razorpay payment signature."""
+    if not rzp_client:
+        raise HTTPException(status_code=503, detail="Razorpay not configured")
+
+    body = f"{payload.razorpay_order_id}|{payload.razorpay_payment_id}"
+    expected = hmac.new(RAZORPAY_KEY_SECRET.encode(), body.encode(), hashlib.sha256).hexdigest()
+
+    if expected != payload.razorpay_signature:
+        raise HTTPException(status_code=400, detail="Payment verification failed. Invalid signature.")
+
+    return {"verified": True, "payment_id": payload.razorpay_payment_id}
+
+
+# ── Place Order ───────────────────────────────────────────────────────────────
 @app.post("/api/orders", response_model=OrderOut)
 def place_order(payload: CheckoutIn, db: Session = Depends(get_db)):
     items = load_cart(db)
@@ -361,7 +498,8 @@ def place_order(payload: CheckoutIn, db: Session = Depends(get_db)):
         total_amount=summary.total,
         payment_method=payload.payment.method,
         payment_status="PENDING" if payload.payment.method == "COD" else "PAID",
-        payment_reference=f"PAY{uuid4().hex[:10].upper()}",
+        payment_reference=payload.payment.payment_reference or f"PAY{uuid4().hex[:10].upper()}",
+        razorpay_order_id=payload.payment.razorpay_order_id or "",
     )
 
     for item in items:
@@ -380,28 +518,29 @@ def place_order(payload: CheckoutIn, db: Session = Depends(get_db)):
     db.add(order)
     db.commit()
     db.refresh(order)
-    try:
-        requests.post(
-            FLASK_NOTIFICATION_URL,
-            json={
-                "order_number": order.order_number,
-                "total_amount": order.total_amount,
-                "payment_method": order.payment_method,
-            },
-            timeout=2,
+
+    # Reload order with items for email
+    full_order = db.scalar(select(Order).where(Order.id == order.id).options(selectinload(Order.items)))
+
+    # Send confirmation email
+    buyer = db.get(User, DEFAULT_USER_ID)
+    if buyer and buyer.email:
+        send_order_email(
+            to_email=buyer.email,
+            order_number=full_order.order_number,
+            customer_name=full_order.customer_name,
+            total=full_order.total_amount,
+            items=full_order.items,
+            payment_method=full_order.payment_method,
         )
-    except requests.RequestException:
-        pass
-    return db.scalar(select(Order).where(Order.id == order.id).options(selectinload(Order.items)))
+
+    return full_order
 
 
 @app.get("/api/orders", response_model=list[OrderOut])
 def order_history(db: Session = Depends(get_db)):
     return db.scalars(
-        select(Order)
-        .where(Order.user_id == DEFAULT_USER_ID)
-        .options(selectinload(Order.items))
-        .order_by(Order.id.desc())
+        select(Order).where(Order.user_id == DEFAULT_USER_ID).options(selectinload(Order.items)).order_by(Order.id.desc())
     ).all()
 
 
@@ -413,30 +552,64 @@ def order_by_number(order_number: str, db: Session = Depends(get_db)):
     return order
 
 
+# ── Seller Dashboard ──────────────────────────────────────────────────────────
 @app.get("/api/seller/{seller_id}/dashboard", response_model=SellerDashboardOut)
 def seller_dashboard(seller_id: int, db: Session = Depends(get_db)):
     seller = db.get(User, seller_id)
     if not seller or seller.role != "seller":
         raise HTTPException(status_code=404, detail="Seller not found")
 
-    products = db.scalars(
-        select(Product)
-        .where(Product.seller_id == seller_id)
-        .options(*product_options())
-        .order_by(Product.id)
-    ).all()
-    orders = db.scalars(
-        select(Order)
-        .join(Order.items)
-        .where(OrderItem.seller_id == seller_id)
-        .options(selectinload(Order.items))
-        .order_by(Order.id.desc())
+    prods = db.scalars(select(Product).where(Product.seller_id == seller_id).options(*product_options()).order_by(Product.id)).all()
+    ords = db.scalars(
+        select(Order).join(Order.items).where(OrderItem.seller_id == seller_id).options(selectinload(Order.items)).order_by(Order.id.desc())
     ).unique().all()
-    seller_items = [item for order in orders for item in order.items if item.seller_id == seller_id]
+    seller_items = [item for order in ords for item in order.items if item.seller_id == seller_id]
     stats = SellerStatsOut(
-        product_count=len(products),
+        product_count=len(prods),
         units_sold=sum(item.quantity for item in seller_items),
         revenue=round(sum(item.price * item.quantity for item in seller_items), 2),
-        order_count=len(orders),
+        order_count=len(ords),
     )
-    return SellerDashboardOut(seller=seller, products=products, orders=orders, stats=stats)
+    return SellerDashboardOut(seller=seller, products=prods, orders=ords, stats=stats)
+
+
+# ── Admin Dashboard ───────────────────────────────────────────────────────────
+@app.get("/api/admin/dashboard", response_model=AdminDashboardOut)
+def admin_dashboard(db: Session = Depends(get_db)):
+    all_users = db.scalars(select(User).order_by(User.id)).all()
+    all_products = db.scalars(select(Product).options(*product_options()).order_by(Product.id)).all()
+    all_orders = db.scalars(select(Order).options(selectinload(Order.items)).order_by(Order.id.desc())).all()
+
+    total_revenue = round(sum(o.total_amount for o in all_orders), 2)
+    paid_orders = [o for o in all_orders if o.payment_status == "PAID"]
+
+    stats = AdminStatsOut(
+        total_users=len(all_users),
+        total_products=len(all_products),
+        total_orders=len(all_orders),
+        total_revenue=total_revenue,
+        paid_orders=len(paid_orders),
+        pending_orders=len(all_orders) - len(paid_orders),
+    )
+
+    return AdminDashboardOut(stats=stats, users=all_users, products=all_products, orders=all_orders)
+
+
+@app.delete("/api/admin/users/{user_id}")
+def admin_delete_user(user_id: int, db: Session = Depends(get_db)):
+    user = db.get(User, user_id)
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+    db.delete(user)
+    db.commit()
+    return {"deleted": True}
+
+
+@app.delete("/api/admin/products/{product_id}")
+def admin_delete_product(product_id: int, db: Session = Depends(get_db)):
+    product = db.get(Product, product_id)
+    if not product:
+        raise HTTPException(status_code=404, detail="Product not found")
+    db.delete(product)
+    db.commit()
+    return {"deleted": True}
