@@ -1,10 +1,12 @@
 import os
+import re
 import smtplib
 import hmac
 import hashlib
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 from hashlib import sha256
+from pathlib import Path
 from uuid import uuid4
 
 import razorpay
@@ -15,9 +17,14 @@ from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy import text, select
 from sqlalchemy.orm import Session, selectinload
 
+ENV_FILE = Path(__file__).resolve().parents[1] / ".env"
+load_dotenv(ENV_FILE)
+
 from .database import Base, engine, get_db
 from .models import CartItem, Category, Order, OrderItem, Product, Review, User, WishlistItem
 from .schemas import (
+    AIChatIn,
+    AIChatOut,
     CartAdd,
     CartOut,
     CartSummaryOut,
@@ -41,8 +48,6 @@ from .schemas import (
     UserOut,
     WishlistOut,
 )
-
-load_dotenv()
 
 Base.metadata.create_all(bind=engine)
 
@@ -73,6 +78,8 @@ EMAIL_PASSWORD = os.getenv("EMAIL_PASSWORD", "")
 # ── Admin credentials ─────────────────────────────────────────────────────────
 ADMIN_EMAIL = os.getenv("ADMIN_EMAIL", "admin@flipkart.com")
 ADMIN_PASSWORD = os.getenv("ADMIN_PASSWORD", "admin123")
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
+OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-4.1-mini")
 
 
 # ── Runtime schema migrations ─────────────────────────────────────────────────
@@ -145,6 +152,195 @@ def token_for(user: User) -> str:
     return f"demo-token-{user.id}-{uuid4().hex[:8]}"
 
 
+def build_ai_context(db: Session) -> str:
+    products = db.scalars(
+        select(Product).options(selectinload(Product.category)).order_by(Product.rating.desc(), Product.id.asc())
+    ).all()
+    cart_items = load_cart(db)
+    orders = db.scalars(
+        select(Order).where(Order.user_id == DEFAULT_USER_ID).options(selectinload(Order.items)).order_by(Order.id.desc())
+    ).all()
+    categories = db.scalars(select(Category).order_by(Category.name)).all()
+
+    product_lines = [
+        f"- {product.title} | {product.category.name} | price INR {product.price:.0f} | mrp INR {product.mrp:.0f} | rating {product.rating} | stock {product.stock}"
+        for product in products[:10]
+    ]
+    cart_lines = [
+        f"- {item.quantity} x {item.product.title} at INR {item.product.price:.0f}"
+        for item in cart_items[:6]
+    ] or ["- Cart is currently empty"]
+    order_lines = [
+        f"- {order.order_number} | {order.status} | {order.tracking_status} | INR {order.total_amount:.0f} | payment {order.payment_method}/{order.payment_status}"
+        for order in orders[:6]
+    ] or ["- No past orders yet"]
+    category_line = ", ".join(category.name for category in categories)
+
+    return "\n".join(
+        [
+            "Store categories:",
+            category_line,
+            "",
+            "Featured catalog snapshot:",
+            *product_lines,
+            "",
+            "Current buyer cart:",
+            *cart_lines,
+            "",
+            "Recent buyer orders:",
+            *order_lines,
+        ]
+    )
+
+
+def extract_openai_text(payload: dict) -> str:
+    if payload.get("output_text"):
+        return payload["output_text"]
+    chunks = []
+    for item in payload.get("output", []):
+        if item.get("type") != "message" or item.get("role") != "assistant":
+            continue
+        for content in item.get("content", []):
+            if content.get("type") in {"output_text", "text"} and content.get("text"):
+                chunks.append(content["text"])
+    return "\n".join(chunks).strip()
+
+
+def money_text(value: float) -> str:
+    return f"INR {value:,.0f}"
+
+
+def local_ai_reply(message: str, db: Session) -> str:
+    text_value = message.strip()
+    text_lower = text_value.lower()
+    categories = db.scalars(select(Category).order_by(Category.name.asc())).all()
+
+    def detect_category_slug() -> str | None:
+        alias_map = {
+            "phone": "mobiles",
+            "phones": "mobiles",
+            "mobile": "mobiles",
+            "mobiles": "mobiles",
+            "headphone": "electronics",
+            "headphones": "electronics",
+            "earbuds": "electronics",
+            "tv": "electronics",
+            "fashion": "fashion",
+            "shirt": "fashion",
+            "jacket": "fashion",
+            "fridge": "home-appliances",
+            "kitchen": "home-appliances",
+            "appliance": "home-appliances",
+            "groceries": "grocery",
+            "grocery": "grocery",
+            "dal": "grocery",
+        }
+        for term, slug in alias_map.items():
+            if term in text_lower:
+                return slug
+        for category in categories:
+            if category.name.lower() in text_lower or category.slug.lower() in text_lower:
+                return category.slug
+        return None
+
+    budget_match = re.search(r"(\d[\d,]{2,})", text_value)
+    budget = int(budget_match.group(1).replace(",", "")) if budget_match else None
+
+    if any(keyword in text_lower for keyword in ["payment", "pay", "cod", "upi", "card", "paypal", "stripe", "razorpay"]):
+        return (
+            "You can check out with Razorpay, Stripe, PayPal, UPI, card, or Cash on Delivery. "
+            "COD places the order with pending payment status, while digital methods store a payment reference after confirmation."
+        )
+
+    if any(keyword in text_lower for keyword in ["order", "orders", "tracking", "track", "history"]):
+        orders = db.scalars(
+            select(Order)
+            .where(Order.user_id == DEFAULT_USER_ID)
+            .options(selectinload(Order.items))
+            .order_by(Order.id.desc())
+        ).all()
+        if not orders:
+            return "You do not have any past orders yet. Add a product to cart, choose a payment method, and place your first order."
+        lines = []
+        for order in orders[:3]:
+            item_text = ", ".join(f"{item.quantity} x {item.title}" for item in order.items[:2])
+            if len(order.items) > 2:
+                item_text += ", ..."
+            lines.append(
+                f"{order.order_number}: {order.tracking_status}, {order.payment_method}/{order.payment_status}, total {money_text(order.total_amount)}"
+                + (f" ({item_text})" if item_text else "")
+            )
+        return "Here are your recent orders:\n" + "\n".join(lines)
+
+    if any(keyword in text_lower for keyword in ["cart", "checkout", "buy now", "place order"]):
+        cart_items = load_cart(db)
+        summary = cart_summary(cart_items)
+        if not cart_items:
+            return "Your cart is empty right now. Add a product first, then continue to checkout, enter the delivery address, choose a payment method, and place the order."
+        item_lines = ", ".join(f"{item.quantity} x {item.product.title}" for item in cart_items[:3])
+        if len(cart_items) > 3:
+            item_lines += ", ..."
+        return (
+            f"Your cart currently has {item_lines}. Total payable is {money_text(summary.total)} after {money_text(summary.discount)} discount. "
+            "From there you can continue to checkout, confirm the address, choose payment, and place the order."
+        )
+
+    if "wishlist" in text_lower:
+        wishlist_items = db.scalars(
+            select(WishlistItem)
+            .where(WishlistItem.user_id == DEFAULT_USER_ID)
+            .options(selectinload(WishlistItem.product))
+        ).all()
+        if not wishlist_items:
+            return "Your wishlist is empty right now. Use the Wishlist button on any product card to save it for later."
+        picks = ", ".join(item.product.title for item in wishlist_items[:4])
+        return f"Your wishlist currently includes {picks}."
+
+    if any(keyword in text_lower for keyword in ["category", "categories", "filter", "filters", "search"]):
+        category_text = ", ".join(category.name for category in categories)
+        return (
+            f"You can search from the top bar and filter by category, max price, and minimum rating. "
+            f"Current categories are {category_text}."
+        )
+
+    requested_category_slug = detect_category_slug()
+    wants_recommendations = any(
+        keyword in text_lower
+        for keyword in ["suggest", "recommend", "best", "show", "find", "phone", "mobile", "headphone", "product"]
+    )
+    if wants_recommendations:
+        product_query = select(Product).options(selectinload(Product.category)).order_by(
+            Product.rating.desc(), Product.reviews.desc(), Product.price.asc()
+        )
+        if requested_category_slug:
+            product_query = product_query.join(Product.category).where(Category.slug == requested_category_slug)
+        if budget is not None:
+            product_query = product_query.where(Product.price <= budget)
+        matches = db.scalars(product_query.limit(3)).all()
+        if matches:
+            lines = [f"- {product.title} for {money_text(product.price)} with rating {product.rating}" for product in matches]
+            intro_bits = []
+            if requested_category_slug:
+                intro_bits.append(f"in {requested_category_slug.replace('-', ' ')}")
+            if budget is not None:
+                intro_bits.append(f"under {money_text(budget)}")
+            intro = " ".join(intro_bits).strip()
+            intro = f" {intro}" if intro else ""
+            return "Here are a few strong picks" + intro + ":\n" + "\n".join(lines)
+
+    featured = db.scalars(
+        select(Product).order_by(Product.rating.desc(), Product.reviews.desc(), Product.price.asc()).limit(3)
+    ).all()
+    if featured:
+        lines = [f"- {product.title} for {money_text(product.price)}" for product in featured]
+        return (
+            "I can help with products, cart, checkout, payments, reviews, and orders. "
+            "Some popular options right now are:\n" + "\n".join(lines)
+        )
+
+    return "I can help with products, payments, checkout, reviews, and orders. Tell me what you want to find."
+
+
 # ── Email helper ──────────────────────────────────────────────────────────────
 def send_order_email(to_email: str, order_number: str, customer_name: str, total: float, items: list, payment_method: str):
     """Send order confirmation email via Gmail SMTP."""
@@ -211,7 +407,66 @@ def health():
         "status": "ok",
         "razorpay": "configured" if rzp_client else "not configured (add keys to .env)",
         "email": "configured" if EMAIL_USER else "not configured (add Gmail to .env)",
+        "openai": "configured" if OPENAI_API_KEY else "not configured (add OPENAI_API_KEY to .env)",
     }
+
+
+@app.post("/api/ai/chat", response_model=AIChatOut)
+def ai_chat(payload: AIChatIn, db: Session = Depends(get_db)):
+    if not OPENAI_API_KEY:
+        return AIChatOut(reply=local_ai_reply(payload.message, db), model="local-fallback")
+
+    context_block = build_ai_context(db)
+    instructions = (
+        "You are Flipkart Clone AI Support, a concise shopping assistant for this demo store. "
+        "Answer questions about products, cart contents, wishlist ideas, checkout, payment methods, seller and buyer features, "
+        "recent orders, and general shopping help using the supplied store context when relevant. "
+        "If the user asks for something that depends on data you do not have, say that clearly and then help with what you can. "
+        "Keep answers brief, practical, and friendly."
+    )
+    history = [
+        {
+            "role": item.role,
+            "content": [{"type": "input_text", "text": item.content}],
+        }
+        for item in payload.history[-10:]
+    ]
+    history.append(
+        {
+            "role": "user",
+            "content": [
+                {
+                    "type": "input_text",
+                    "text": f"{context_block}\n\nUser question:\n{payload.message}",
+                }
+            ],
+        }
+    )
+
+    try:
+        response = requests.post(
+            "https://api.openai.com/v1/responses",
+            headers={
+                "Authorization": f"Bearer {OPENAI_API_KEY}",
+                "Content-Type": "application/json",
+            },
+            json={
+                "model": OPENAI_MODEL,
+                "instructions": instructions,
+                "input": history,
+                "max_output_tokens": 500,
+            },
+            timeout=45,
+        )
+        response.raise_for_status()
+    except requests.RequestException as exc:
+        return AIChatOut(reply=local_ai_reply(payload.message, db), model="local-fallback")
+
+    response_payload = response.json()
+    reply = extract_openai_text(response_payload)
+    if not reply:
+        return AIChatOut(reply=local_ai_reply(payload.message, db), model="local-fallback")
+    return AIChatOut(reply=reply, model=response_payload.get("model", OPENAI_MODEL))
 
 
 # ── Auth ──────────────────────────────────────────────────────────────────────

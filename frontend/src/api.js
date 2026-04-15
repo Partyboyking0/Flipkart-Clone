@@ -25,6 +25,8 @@ export const api = {
     request("/api/auth/login", { method: "POST", body: JSON.stringify(payload) }),
   googleLogin: (payload) =>
     request("/api/auth/oauth/google", { method: "POST", body: JSON.stringify(payload) }),
+  aiChat: (payload) =>
+    request("/api/ai/chat", { method: "POST", body: JSON.stringify(payload) }),
 
   // Catalog
   categories: () => request("/api/categories"),

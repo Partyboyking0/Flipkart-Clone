@@ -673,6 +673,62 @@ function AdminPage({ setNotice }) {
   );
 }
 
+function AIChatWidget({ open, setOpen, messages, sendMessage, loading }) {
+  const [draft, setDraft] = useState("");
+  const starters = [
+    "Suggest a phone under 25000",
+    "How do payments work here?",
+    "Show me my recent orders",
+  ];
+  const showStarters = messages.length <= 1;
+
+  const handleSubmit = async (event) => {
+    event.preventDefault();
+    if (!draft.trim() || loading) return;
+    const text = draft.trim();
+    setDraft("");
+    await sendMessage(text);
+  };
+
+  return (
+    <section className={open ? "ai-chat open" : "ai-chat"}>
+      {open ? (
+        <div className="ai-chat-panel">
+          <div className="ai-chat-header">
+            <div>
+              <strong>Flipkart AI Bot</strong>
+              <span>OpenAI-powered shopping help</span>
+            </div>
+            <button onClick={() => setOpen(false)}>Close</button>
+          </div>
+          <div className="ai-chat-body">
+            {messages.map((message, index) => (
+              <article key={`${message.role}-${index}`} className={message.role === "assistant" ? "ai-msg assistant" : "ai-msg user"}>
+                <span>{message.role === "assistant" ? "AI" : "You"}</span>
+                <p>{message.content}</p>
+              </article>
+            ))}
+            {showStarters && (
+              <div className="ai-starters">
+                {starters.map((starter) => (
+                  <button key={starter} onClick={() => sendMessage(starter)}>{starter}</button>
+                ))}
+              </div>
+            )}
+            {loading && <div className="ai-msg assistant"><span>AI</span><p>Thinking...</p></div>}
+          </div>
+          <form className="ai-chat-form" onSubmit={handleSubmit}>
+            <input value={draft} onChange={(event) => setDraft(event.target.value)} placeholder="Ask about products, orders, payments..." />
+            <button type="submit" disabled={loading}>Send</button>
+          </form>
+        </div>
+      ) : (
+        <button className="ai-chat-launcher" onClick={() => setOpen(true)}>Ask AI</button>
+      )}
+    </section>
+  );
+}
+
 function ConfirmationPage({ order, go }) {
   return (
     <main className="confirmation">
@@ -707,6 +763,11 @@ export default function App() {
   const [order, setOrder]                     = useState(null);
   const [loading, setLoading]                 = useState(false);
   const [notice, setNotice]                   = useState("");
+  const [chatOpen, setChatOpen]               = useState(false);
+  const [chatLoading, setChatLoading]         = useState(false);
+  const [chatMessages, setChatMessages]       = useState([
+    { role: "assistant", content: "Hi, I am the Flipkart AI bot. Ask me about products, payments, orders, or general shopping questions." },
+  ]);
 
   const buyer       = authUser || users.find((u) => u.id === BUYER_ID);
   const seller      = users.find((u) => u.id === SELLER_ID);
@@ -804,6 +865,26 @@ export default function App() {
     catch(e) { setNotice(e.message); }
   };
 
+  const sendChatMessage = async (message) => {
+    const nextMessages = [...chatMessages, { role: "user", content: message }];
+    setChatMessages(nextMessages);
+    setChatLoading(true);
+    try {
+      const result = await api.aiChat({
+        message,
+        history: nextMessages.slice(-10).map((item) => ({ role: item.role, content: item.content })),
+      });
+      setChatMessages((current) => [...current, { role: "assistant", content: result.reply }]);
+      setChatOpen(true);
+    } catch (error) {
+      setNotice(error.message);
+      setChatMessages((current) => [...current, { role: "assistant", content: `I hit a snag: ${error.message}` }]);
+      setChatOpen(true);
+    } finally {
+      setChatLoading(false);
+    }
+  };
+
   return (
     <ErrorBoundary>
       <Header query={query} setQuery={setQuery} cartCount={cartCount} page={page} go={go}
@@ -819,6 +900,7 @@ export default function App() {
       {page==="checkout"     && <CheckoutPage cart={cart} buyer={buyer} setCheckoutAddress={setCheckoutAddress} go={go} />}
       {page==="payment"      && <PaymentPage cart={cart} checkoutAddress={checkoutAddress} placeOrder={placeOrder} go={go} setNotice={setNotice} />}
       {page==="confirmation" && <ConfirmationPage order={order} go={go} />}
+      <AIChatWidget open={chatOpen} setOpen={setChatOpen} messages={chatMessages} sendMessage={sendChatMessage} loading={chatLoading} />
     </ErrorBoundary>
   );
 }

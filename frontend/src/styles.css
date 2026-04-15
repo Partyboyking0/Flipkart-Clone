@@ -808,6 +808,137 @@ button {
   box-shadow: 0 4px 16px rgba(0, 0, 0, 0.2);
 }
 
+.ai-chat {
+  position: fixed;
+  right: 18px;
+  bottom: 74px;
+  z-index: 40;
+}
+
+.ai-chat-launcher {
+  min-height: 48px;
+  padding: 0 18px;
+  color: #fff;
+  background: #172337;
+  box-shadow: 0 8px 22px rgba(0, 0, 0, 0.22);
+  font-weight: 700;
+}
+
+.ai-chat-panel {
+  width: min(360px, calc(100vw - 24px));
+  background: #fff;
+  border-radius: 8px;
+  box-shadow: 0 18px 40px rgba(0, 0, 0, 0.22);
+  overflow: hidden;
+}
+
+.ai-chat-header {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  align-items: center;
+  padding: 14px 16px;
+  background: #172337;
+  color: #fff;
+}
+
+.ai-chat-header strong,
+.ai-chat-header span {
+  display: block;
+}
+
+.ai-chat-header span {
+  margin-top: 4px;
+  color: #c7d2fe;
+  font-size: 12px;
+}
+
+.ai-chat-header button {
+  min-height: 34px;
+  padding: 0 10px;
+  color: #172337;
+  background: #fff;
+  font-weight: 700;
+}
+
+.ai-chat-body {
+  display: grid;
+  gap: 10px;
+  max-height: 420px;
+  padding: 14px;
+  overflow-y: auto;
+  background: #f8fafc;
+}
+
+.ai-msg {
+  max-width: 88%;
+  padding: 10px 12px;
+  border-radius: 8px;
+  background: #fff;
+}
+
+.ai-msg span {
+  display: block;
+  margin-bottom: 6px;
+  color: #64748b;
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.ai-msg p {
+  margin: 0;
+  line-height: 1.5;
+  white-space: pre-wrap;
+}
+
+.ai-msg.user {
+  justify-self: end;
+  color: #fff;
+  background: #2874f0;
+}
+
+.ai-msg.user span {
+  color: #dbeafe;
+}
+
+.ai-starters {
+  display: grid;
+  gap: 8px;
+}
+
+.ai-starters button {
+  min-height: 38px;
+  padding: 0 12px;
+  color: #172337;
+  background: #fff;
+  border: 1px solid #dbe1ea;
+  text-align: left;
+  font-weight: 700;
+}
+
+.ai-chat-form {
+  display: grid;
+  grid-template-columns: 1fr 90px;
+  gap: 10px;
+  padding: 14px;
+  border-top: 1px solid #e5e7eb;
+  background: #fff;
+}
+
+.ai-chat-form input {
+  min-height: 42px;
+  padding: 0 12px;
+  border: 1px solid #d7d7d7;
+  border-radius: 6px;
+}
+
+.ai-chat-form button {
+  min-height: 42px;
+  color: #fff;
+  background: #fb641b;
+  font-weight: 700;
+}
+
 .fatal-error {
   width: min(720px, calc(100% - 24px));
   margin: 40px auto;
@@ -897,7 +1028,13 @@ button {
   .review-line,
   .reviews form,
   .seller-table div,
-  .order-card {
+  .order-card,
+  .ai-chat-form {
     grid-template-columns: 1fr;
+  }
+
+  .ai-chat {
+    right: 12px;
+    bottom: 70px;
   }
 }

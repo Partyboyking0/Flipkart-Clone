@@ -239,3 +239,18 @@ class ReviewOut(BaseModel):
     verified_purchase: bool
     user: UserOut
     model_config = {"from_attributes": True}
+
+
+class AIChatMessageIn(BaseModel):
+    role: str = Field(pattern="^(user|assistant)$")
+    content: str = Field(min_length=1, max_length=4000)
+
+
+class AIChatIn(BaseModel):
+    message: str = Field(min_length=1, max_length=4000)
+    history: list[AIChatMessageIn] = Field(default_factory=list, max_length=12)
+
+
+class AIChatOut(BaseModel):
+    reply: str
+    model: str

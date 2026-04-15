@@ -1,31 +1,30 @@
-# Flipkart Clone - SDE Intern Fullstack Assignment
+# Flipkart Clone
 
-A functional e-commerce web application inspired by Flipkart's browsing, cart, checkout, and order placement flow.
+Full-stack Flipkart-style demo store built with React, FastAPI, Flask, and MySQL.
 
-## Tech Stack
+## Stack
 
-- Frontend: React.js SPA with Vite
-- Main Backend: Python FastAPI
-- Companion Backend: Python Flask notification/health service
-- Database: MySQL with SQLAlchemy ORM
+- Frontend: React + Vite
+- Main API: FastAPI + SQLAlchemy
+- Companion service: Flask
+- Database: MySQL
+- AI support bot: OpenAI Responses API
 
-## Features
+## What The App Includes
 
-- Product listing grid with Flipkart-like cards
-- Search products by name
-- Filter products by category, price, and rating
-- Product detail page with image carousel, description, specs, stock, Add to Cart, and Buy Now
-- Login, signup, and demo Google OAuth sign-in
-- Wishlist add/remove
-- Reviews and star ratings with verified-purchase badges
-- Shopping cart with quantity update, remove item, subtotal, discount, delivery fee, and total
-- Checkout page with shipping address form
-- Payment step before order placement using Stripe, Razorpay, PayPal, UPI, card, or cash on delivery
-- Order confirmation page with generated order ID
-- Buyer dashboard with user details, past order summaries, and tracking status
-- Seller dashboard with seller details, inventory, sales, and order summaries
-- Seed data across multiple categories
-- Responsive layout for mobile, tablet, and desktop
+- Buyer login, signup, and demo Google sign-in
+- Product listing with categories
+- Search and filters for category, price, and rating
+- Product detail page with gallery, specs, reviews, and ratings
+- Cart and wishlist
+- Checkout with address capture
+- Payment step before order placement
+- Payment methods: Razorpay, Stripe, PayPal, UPI, card, COD
+- Order history and tracking status
+- Buyer and seller views
+- Admin dashboard
+- Verified-purchase reviews
+- OpenAI-powered chat widget for shopping help
 
 ## Project Structure
 
@@ -37,73 +36,220 @@ backend/
     models.py
     schemas.py
     seed.py
+  .env.example
   flask_service.py
   requirements.txt
-  schema.sql
-  seed.sql
 frontend/
-  index.html
-  package.json
   src/
     App.jsx
     api.js
     main.jsx
     styles.css
+  package.json
+README.md
 ```
 
-## MySQL Setup
+## Demo Accounts
+
+- Buyer
+  - Email: `aarav.buyer@example.com`
+  - Password: `password123`
+- Seller
+  - Email: `seller@example.com`
+  - Password: `seller123`
+- Admin
+  - Email: `admin@flipkart.com`
+  - Password: `admin123`
+
+## 1. Create The Database
+
+Open MySQL and create the database:
 
 ```sql
 CREATE DATABASE flipkart_clone CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
 ```
 
+## 2. Create `backend/.env`
+
+Use [`backend/.env.example`](/c:/Users/Acer/Desktop/Flipkart/backend/.env.example) as the template.
+
+Quick copy commands:
+
+```powershell
+Copy-Item backend\.env.example backend\.env
+```
+
+```cmd
+copy backend\.env.example backend\.env
+```
+
+Example:
+
+```env
+DATABASE_URL=mysql+pymysql://root:password@localhost:3306/flipkart_clone
+OPENAI_API_KEY=your_openai_api_key_here
+OPENAI_MODEL=gpt-4.1-mini
+
+RAZORPAY_KEY_ID=
+RAZORPAY_KEY_SECRET=
+
+EMAIL_HOST=smtp.gmail.com
+EMAIL_PORT=587
+EMAIL_USER=
+EMAIL_PASSWORD=
+
+ADMIN_EMAIL=admin@flipkart.com
+ADMIN_PASSWORD=admin123
+```
+
+Notes:
+
+- `OPENAI_API_KEY` is required for the chatbot.
+- Razorpay and email settings are optional for local demo runs.
+
+## 3. Install Backend Dependencies
+
+From the repo root:
+
+```powershell
+python -m pip install -r backend\requirements.txt
+```
+
+## 4. Seed The Database
+
+From the repo root:
+
 ```powershell
 $env:DATABASE_URL="mysql+pymysql://root:password@localhost:3306/flipkart_clone"
+python -m backend.app.seed
 ```
 
-You can either let FastAPI create tables automatically on startup, or run:
+CMD version:
 
-```powershell
-mysql -u root -p flipkart_clone < backend/schema.sql
-mysql -u root -p flipkart_clone < backend/seed.sql
+```cmd
+set DATABASE_URL=mysql+pymysql://root:password@localhost:3306/flipkart_clone
+python -m backend.app.seed
 ```
 
-## Backend Setup
+## 5. Start FastAPI
 
-```powershell
-cd backend
-python -m venv .venv
-.\.venv\Scripts\Activate.ps1
-pip install -r requirements.txt
-python -m app.seed
-uvicorn app.main:app --reload --port 8000
-```
-
-Run the Flask companion service in another terminal:
+PowerShell:
 
 ```powershell
 cd backend
-.\.venv\Scripts\Activate.ps1
+$env:DATABASE_URL="mysql+pymysql://root:password@localhost:3306/flipkart_clone"
+python -m uvicorn app.main:app --reload --host 127.0.0.1 --port 8000
+```
+
+CMD:
+
+```cmd
+cd backend
+set DATABASE_URL=mysql+pymysql://root:password@localhost:3306/flipkart_clone
+python -m uvicorn app.main:app --reload --host 127.0.0.1 --port 8000
+```
+
+Health check:
+
+```text
+http://127.0.0.1:8000/api/health
+```
+
+## 6. Start Flask
+
+Open a second terminal:
+
+```powershell
+cd backend
 python flask_service.py
 ```
 
-FastAPI runs at `http://localhost:8000`. Flask runs at `http://localhost:5001`.
+CMD:
 
-## Frontend Setup
+```cmd
+cd backend
+python flask_service.py
+```
 
-Install Node.js first if it is not available on your machine.
+Health check:
+
+```text
+http://127.0.0.1:5001/health
+```
+
+## 7. Start Frontend
+
+Open a third terminal:
 
 ```powershell
 cd frontend
 npm install
-npm run dev
+npm run dev -- --host 127.0.0.1 --port 5173
 ```
 
-The frontend runs at `http://localhost:5173`.
+CMD:
 
-## Assumptions
+```cmd
+cd frontend
+npm install
+npm run dev -- --host 127.0.0.1 --port 5173
+```
 
-- No login is required, as instructed in the assignment. The app seeds a demo buyer with ID `1` and seller with ID `2`.
-- The FastAPI service owns product, cart, and order functionality.
-- The Flask service represents a lightweight companion service for operational health and order notification handling.
-- Product images use public remote image URLs so the repository stays lightweight.
+App URL:
+
+```text
+http://127.0.0.1:5173/
+```
+
+Do not open `frontend/index.html` directly. Run Vite and use the local dev URL.
+
+## Quick Run Order
+
+Start things in this order:
+
+1. MySQL
+2. `python -m backend.app.seed`
+3. FastAPI on `127.0.0.1:8000`
+4. Flask on `127.0.0.1:5001`
+5. Vite on `127.0.0.1:5173`
+
+## Useful Endpoints
+
+- Health: `http://127.0.0.1:8000/api/health`
+- Products: `http://127.0.0.1:8000/api/products`
+- Orders: `http://127.0.0.1:8000/api/orders`
+- AI chat: `http://127.0.0.1:8000/api/ai/chat`
+- Flask health: `http://127.0.0.1:5001/health`
+
+## Chatbot Setup
+
+The chat widget is built into the frontend and calls the FastAPI route at `/api/ai/chat`.
+
+If `OPENAI_API_KEY` is missing, the app will return a helpful backend error instead of silently failing.
+
+The chatbot uses the store catalog, current cart, and recent orders as context so it can answer questions about:
+
+- product suggestions
+- checkout and payment options
+- recent orders
+- buyer and seller workflows
+
+## What I Verified
+
+- Backend import works
+- `python -m compileall backend` passes
+- Frontend production build passes
+
+## Troubleshooting
+
+- Blank frontend page:
+  - Make sure you opened `http://127.0.0.1:5173/`
+  - Hard refresh with `Ctrl + Shift + R`
+- `mysqladmin` not recognized:
+  - Add your MySQL `bin` directory to `PATH`
+- Chatbot says OpenAI is not configured:
+  - Add `OPENAI_API_KEY` to `backend/.env`
+- Products or cart fail to load:
+  - Confirm MySQL is running
+  - Rerun `python -m backend.app.seed`
+  - Check `http://127.0.0.1:8000/api/health`
