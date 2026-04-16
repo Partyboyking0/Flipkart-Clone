@@ -1,6 +1,8 @@
 # Flipkart Clone
 
 Full-stack Flipkart-style demo store built with React, FastAPI, Flask, and MySQL.
+### Live Demo: 
+- https://flipkart-clone-five-beryl.vercel.app/
 
 ## Stack
 
