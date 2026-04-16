@@ -35,9 +35,11 @@ function notifyAuthExpired(message) {
 async function request(path, options = {}) {
   const { auth = true, headers = {}, ...fetchOptions } = options;
   const hasAuthHeader = auth && Boolean(authToken);
+  const hasBody = fetchOptions.body !== undefined;
+
   const response = await fetch(`${API_BASE_URL}${path}`, {
     headers: {
-      "Content-Type": "application/json",
+      ...(hasBody ? { "Content-Type": "application/json" } : {}),
       ...(hasAuthHeader ? { Authorization: `Bearer ${authToken}` } : {}),
       ...headers,
     },
@@ -58,6 +60,7 @@ async function request(path, options = {}) {
 
   return response.json();
 }
+
 
 export const api = {
   hydrateToken: () => {
