@@ -75,6 +75,7 @@ class SignupIn(AuthIn):
 class OAuthIn(BaseModel):
     credential: str = Field(min_length=20)
     provider: str = Field(default="google", max_length=40)
+    role: str = Field(default="buyer", pattern="^(buyer|seller)$")
 
 
 class AuthOut(BaseModel):

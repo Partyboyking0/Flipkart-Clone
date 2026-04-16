@@ -6,6 +6,32 @@ const defaultChatMessages = [
   { role: "assistant", content: "Hi, I am the Flipkart AI bot. Ask me about products, payments, orders, or general shopping questions." },
 ];
 const orderSteps = ["PLACED", "PACKED", "SHIPPED", "DELIVERED"];
+const heroBanners = [
+  {
+    title: "Big Saving Days",
+    subtitle: "Fresh picks across mobiles, appliances, fashion, and daily essentials.",
+    image: "https://images.unsplash.com/photo-1512436991641-6745cdb1723f?auto=format&fit=crop&w=1400&q=80",
+    accent: "Up to 70% off",
+  },
+  {
+    title: "Upgrade Your Tech",
+    subtitle: "Top-rated gadgets with exchange-friendly prices and fast delivery.",
+    image: "https://images.unsplash.com/photo-1511707171634-5f897ff02aa9?auto=format&fit=crop&w=1400&q=80",
+    accent: "Trending now",
+  },
+  {
+    title: "Home Comfort Edit",
+    subtitle: "Smart picks for kitchens, living spaces, and everyday convenience.",
+    image: "https://images.unsplash.com/photo-1556911220-bff31c812dba?auto=format&fit=crop&w=1400&q=80",
+    accent: "Limited-time deals",
+  },
+];
+const footerColumns = [
+  { title: "About", links: ["Contact Us", "About Us", "Careers", "Stories"] },
+  { title: "Help", links: ["Payments", "Shipping", "Cancellation", "FAQ"] },
+  { title: "Policy", links: ["Return Policy", "Terms Of Use", "Security", "Privacy"] },
+  { title: "Social", links: ["Facebook", "X", "YouTube", "Instagram"] },
+];
 
 const money = (value) =>
   new Intl.NumberFormat("en-IN", { style: "currency", currency: "INR", maximumFractionDigits: 0 }).format(value || 0);
@@ -99,7 +125,7 @@ function TrackingTimeline({ status }) {
   );
 }
 
-function GoogleSignInButton({ googleLogin }) {
+function GoogleSignInButton({ googleLogin, selectedRole }) {
   const clientId = import.meta.env.VITE_GOOGLE_CLIENT_ID || "";
   const ref = useRef(null);
   const [error, setError] = useState("");
@@ -115,7 +141,7 @@ function GoogleSignInButton({ googleLogin }) {
       window.google.accounts.id.initialize({
         client_id: clientId,
         callback: ({ credential }) => {
-          if (credential) googleLogin({ credential, provider: "google" });
+          if (credential) googleLogin({ credential, provider: "google", role: selectedRole });
         },
       });
       window.google.accounts.id.renderButton(ref.current, {
@@ -155,43 +181,74 @@ function GoogleSignInButton({ googleLogin }) {
   }, [clientId, googleLogin]);
 
   if (!clientId) {
-    return <p className="helper-text">Add VITE_GOOGLE_CLIENT_ID to enable real Google OAuth.</p>;
+    return <p className="helper-text">Add VITE_GOOGLE_CLIENT_ID in frontend/.env and restart Vite to enable Google sign-in.</p>;
   }
 
   return (
-    <div>
+    <div className="oauth-box">
       <div ref={ref} />
-      {origin && <p className="helper-text">For local Google OAuth, add {origin} to Authorized JavaScript origins in Google Cloud Console.</p>}
+      <p className="helper-text">Continue with Google as a <strong>{selectedRole}</strong>.</p>
+      {origin && <p className="helper-text">Authorized JavaScript origin: <strong>{origin}</strong></p>}
       {error && <p className="helper-text bad-text">{error}</p>}
     </div>
   );
 }
 
 function Header({ query, setQuery, cartCount, currentUser, go, logout }) {
+  const [mobileSearchOpen, setMobileSearchOpen] = useState(false);
   const isAdmin = currentUser?.role === "admin";
   const isSeller = currentUser?.role === "seller";
+  const primaryLabel = currentUser ? currentUser.name.split(" ")[0] : "Login";
+  const sellerActionLabel = isAdmin ? "Admin Panel" : isSeller ? "Seller Hub" : "Become a Seller";
+  const moreLabel = isAdmin ? "Analytics" : currentUser?.role === "buyer" ? "Orders" : "More";
+  const openPrimary = () => go(currentUser ? (isAdmin ? "admin" : isSeller ? "seller" : "account") : "auth");
+  const openSeller = () => go(isAdmin ? "admin" : "seller");
+  const openMore = () => {
+    if (!currentUser) {
+      go("auth");
+      return;
+    }
+    if (isAdmin) {
+      go("admin");
+      return;
+    }
+    if (isSeller) {
+      go("seller");
+      return;
+    }
+    go("orders");
+  };
 
   return (
     <header className="topbar">
-      <button className="brand" onClick={() => go("home")} aria-label="Go home">
-        <span>Flipkart</span>
-        <small>Explore Plus</small>
-      </button>
-      <label className="search">
-        <span>Search</span>
-        <input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search for products, brands and more" />
-      </label>
-      <nav className="nav-actions">
-        <button onClick={() => go(currentUser ? (isAdmin ? "admin" : isSeller ? "seller" : "account") : "auth")}>
-          {currentUser?.name || "Login"}
+      <div className="topbar-inner">
+        <button className="brand" onClick={() => go("home")} aria-label="Go home">
+          <span>Flipkart</span>
+          <small>Explore <strong>Plus</strong></small>
         </button>
-        {!isAdmin && currentUser && <button onClick={() => go("account")}>Account</button>}
-        {currentUser?.role === "buyer" && <button onClick={() => go("orders")}>Orders</button>}
-        {isSeller && <button onClick={() => go("seller")}>Seller</button>}
-        {isAdmin && <button onClick={() => go("admin")}>Admin</button>}
-        {!isAdmin && <button onClick={() => go(currentUser ? "cart" : "auth")}>Cart ({cartCount})</button>}
-        {currentUser && <button onClick={logout}>Logout</button>}
-      </nav>
+
+        <button className="mobile-icon-button mobile-only" onClick={() => setMobileSearchOpen((value) => !value)}>
+          Search
+        </button>
+
+        <label className={mobileSearchOpen ? "search open" : "search"}>
+          <span className="search-icon" aria-hidden="true">Search</span>
+          <input
+            value={query}
+            onChange={(event) => setQuery(event.target.value)}
+            placeholder="Search for products, brands and more"
+          />
+        </label>
+
+        <nav className="nav-actions">
+          <button className="nav-login" onClick={openPrimary}>{primaryLabel}</button>
+          <button className="nav-link desktop-only" onClick={openSeller}>{sellerActionLabel}</button>
+          <button className="nav-link desktop-only" onClick={openMore}>{moreLabel} <span className="caret">v</span></button>
+          {!isAdmin && <button className="nav-link nav-cart" onClick={() => go(currentUser ? "cart" : "auth")}>Cart <span>{cartCount}</span></button>}
+          {currentUser && !isAdmin && <button className="nav-link desktop-only" onClick={() => go("account")}>Account</button>}
+          {currentUser && <button className="nav-link desktop-only" onClick={logout}>Logout</button>}
+        </nav>
+      </div>
     </header>
   );
 }
@@ -268,11 +325,168 @@ function ProductRail({ title, items, openProduct, wishlistIds, toggleWishlist, e
   );
 }
 
+function DealCard({ product, openProduct, wished, toggleWishlist }) {
+  return (
+    <article className="deal-card" onClick={() => openProduct(product.id)}>
+      <button
+        className={wished ? "deal-wish active" : "deal-wish"}
+        onClick={(event) => {
+          event.stopPropagation();
+          toggleWishlist(product.id);
+        }}
+      >
+        {wished ? "Saved" : "Wishlist"}
+      </button>
+      <div className="deal-card-media">
+        <img src={product.images[0]?.url} alt={product.images[0]?.alt || product.title} />
+      </div>
+      <h3 title={product.title}>{product.title}</h3>
+      <strong>{percentageOff(product)}% Off</strong>
+      <span>{product.brand}</span>
+    </article>
+  );
+}
+
+function CategoryStrip({ categories, products, activeCategory, selectCategory }) {
+  const items = categories.slice(0, 8).map((category, index) => {
+    const preview = products.find((product) => product.category.slug === category.slug)?.images?.[0]?.url || heroBanners[index % heroBanners.length].image;
+    return { ...category, preview };
+  });
+
+  return (
+    <section className="category-strip">
+      <div className="category-strip-inner">
+        {items.map((category) => (
+          <button
+            key={category.id}
+            className={activeCategory === category.slug ? "category-chip active" : "category-chip"}
+            onClick={() => selectCategory(category.slug)}
+          >
+            <span className="category-image-wrap">
+              <img src={category.preview} alt={category.name} />
+            </span>
+            <span>{category.name}</span>
+          </button>
+        ))}
+      </div>
+    </section>
+  );
+}
+
+function HeroCarousel() {
+  const [index, setIndex] = useState(0);
+
+  useEffect(() => {
+    const timer = window.setInterval(() => {
+      setIndex((current) => (current + 1) % heroBanners.length);
+    }, 4500);
+    return () => window.clearInterval(timer);
+  }, []);
+
+  const activeBanner = heroBanners[index];
+
+  return (
+    <section className="hero-carousel">
+      <button className="hero-arrow left" onClick={() => setIndex((current) => (current - 1 + heroBanners.length) % heroBanners.length)}>
+        {"<"}
+      </button>
+      <div className="hero-slide">
+        <img src={activeBanner.image} alt={activeBanner.title} />
+        <div className="hero-copy">
+          <span>{activeBanner.accent}</span>
+          <h1>{activeBanner.title}</h1>
+          <p>{activeBanner.subtitle}</p>
+        </div>
+      </div>
+      <button className="hero-arrow right" onClick={() => setIndex((current) => (current + 1) % heroBanners.length)}>
+        {">"}
+      </button>
+      <div className="hero-dots">
+        {heroBanners.map((banner, dotIndex) => (
+          <button
+            key={banner.title}
+            className={dotIndex === index ? "hero-dot active" : "hero-dot"}
+            onClick={() => setIndex(dotIndex)}
+            aria-label={`Show ${banner.title}`}
+          />
+        ))}
+      </div>
+    </section>
+  );
+}
+
+function DealsSection({ title, items, countdown, openProduct, wishlistIds, toggleWishlist, onViewAll, hint }) {
+  if (!items.length) return null;
+
+  return (
+    <section className="deal-section">
+      <div className="deal-section-head">
+        <div>
+          <h2>{title}</h2>
+          {countdown ? <p>{countdown}</p> : hint ? <p>{hint}</p> : null}
+        </div>
+        <button onClick={onViewAll}>View All</button>
+      </div>
+      <div className="deal-track">
+        {items.map((product) => (
+          <DealCard
+            key={`${title}-${product.id}`}
+            product={product}
+            openProduct={openProduct}
+            wished={wishlistIds.includes(product.id)}
+            toggleWishlist={toggleWishlist}
+          />
+        ))}
+      </div>
+    </section>
+  );
+}
+
+function Footer() {
+  return (
+    <footer className="site-footer">
+      <div className="site-footer-inner">
+        <div className="footer-links-grid">
+          {footerColumns.map((column) => (
+            <section key={column.title}>
+              <h2>{column.title}</h2>
+              {column.links.map((link) => (
+                <a key={link} href="#">{link}</a>
+              ))}
+            </section>
+          ))}
+          <section className="footer-address-block">
+            <h2>Mail Us</h2>
+            <p>Flipkart Clone Internet Private Limited</p>
+            <p>Buildings Alyssa, Begonia and Clover</p>
+            <p>Bengaluru, Karnataka, India</p>
+          </section>
+          <section className="footer-address-block">
+            <h2>Registered Office Address</h2>
+            <p>Flipkart Clone Campus, Outer Ring Road</p>
+            <p>Bengaluru, Karnataka, India</p>
+            <p>Support: support@flipkartclone.local</p>
+          </section>
+        </div>
+        <div className="footer-bottom">
+          <small>Copyright 2026 Flipkart Clone. All rights reserved.</small>
+          <div className="payment-pill-row">
+            {["Visa", "Mastercard", "UPI", "Razorpay", "PayPal", "COD"].map((item) => (
+              <span key={item}>{item}</span>
+            ))}
+          </div>
+        </div>
+      </div>
+    </footer>
+  );
+}
+
 function HomePage({
   products,
   categories,
   filters,
   setFilters,
+  query,
   openProduct,
   loading,
   buyer,
@@ -282,80 +496,135 @@ function HomePage({
   recentlyViewed,
 }) {
   const updateFilter = (key, value) => setFilters((current) => ({ ...current, [key]: value }));
+  const activeSearch = query.trim().length > 0;
+  const hasActiveFilters = activeSearch || filters.category !== "all" || filters.max_price || filters.min_rating;
+  const [countdown, setCountdown] = useState("");
+
+  useEffect(() => {
+    const tick = () => {
+      const now = new Date();
+      const target = new Date(now);
+      target.setHours(23, 59, 59, 0);
+      const diff = Math.max(target.getTime() - now.getTime(), 0);
+      const hours = String(Math.floor(diff / (1000 * 60 * 60))).padStart(2, "0");
+      const minutes = String(Math.floor((diff / (1000 * 60)) % 60)).padStart(2, "0");
+      const seconds = String(Math.floor((diff / 1000) % 60)).padStart(2, "0");
+      setCountdown(`Ends in ${hours}:${minutes}:${seconds}`);
+    };
+    tick();
+    const timer = window.setInterval(tick, 1000);
+    return () => window.clearInterval(timer);
+  }, []);
+
+  const sections = categories
+    .map((category) => ({
+      category,
+      items: products.filter((product) => product.category.slug === category.slug).slice(0, 6),
+    }))
+    .filter((section) => section.items.length);
 
   return (
-    <main className="page-shell">
-      <aside className="filters">
-        <h2>Filters</h2>
-        <button className={filters.category === "all" ? "active" : ""} onClick={() => updateFilter("category", "all")}>
-          All Categories
-        </button>
-        {categories.map((category) => (
-          <button
-            key={category.id}
-            className={filters.category === category.slug ? "active" : ""}
-            onClick={() => updateFilter("category", category.slug)}
-          >
-            {category.name}
-          </button>
-        ))}
-        <label>
-          Max Price
-          <input type="number" value={filters.max_price} onChange={(event) => updateFilter("max_price", event.target.value)} placeholder="50000" />
-        </label>
-        <label>
-          Min Rating
-          <select value={filters.min_rating} onChange={(event) => updateFilter("min_rating", event.target.value)}>
-            <option value="">Any</option>
-            <option value="4">4+</option>
-            <option value="4.5">4.5+</option>
-          </select>
-        </label>
-      </aside>
-      <section className="listing">
-        <UserPanel user={buyer} />
-        {buyer?.role === "buyer" && (
-          <div className="stack-gap">
-            <ProductRail
-              title="AI Recommendations"
-              items={recommendations}
-              openProduct={openProduct}
-              wishlistIds={wishlistIds}
-              toggleWishlist={toggleWishlist}
-              emptyText="Browse a few products and this section will warm up."
-            />
-            <ProductRail
-              title="Recently Viewed"
-              items={recentlyViewed}
-              openProduct={openProduct}
-              wishlistIds={wishlistIds}
-              toggleWishlist={toggleWishlist}
-              emptyText="Your viewed products will show up here."
-            />
+    <main className="storefront-page">
+      <CategoryStrip categories={categories} products={products} activeCategory={filters.category} selectCategory={updateFilter.bind(null, "category")} />
+      <div className="storefront-main">
+        <HeroCarousel />
+        <section className="filter-ribbon">
+          <div className="filter-ribbon-head">
+            <div>
+              <h2>{hasActiveFilters ? "Filtered results" : "Discover top picks"}</h2>
+              <p>{loading ? "Updating products..." : `${products.length} products ready to explore`}</p>
+            </div>
+            <button className="clear-filters" onClick={() => setFilters({ category: "all", max_price: "", min_rating: "" })}>
+              Clear Filters
+            </button>
           </div>
-        )}
-        <div className="listing-title">
-          <h1>Top Deals For You</h1>
-          <span>{products.length} products</span>
-        </div>
+          <div className="filter-ribbon-controls">
+            <label>
+              Category
+              <select value={filters.category} onChange={(event) => updateFilter("category", event.target.value)}>
+                <option value="all">All Categories</option>
+                {categories.map((category) => (
+                  <option key={category.id} value={category.slug}>{category.name}</option>
+                ))}
+              </select>
+            </label>
+            <label>
+              Max Price
+              <input type="number" value={filters.max_price} onChange={(event) => updateFilter("max_price", event.target.value)} placeholder="50000" />
+            </label>
+            <label>
+              Min Rating
+              <select value={filters.min_rating} onChange={(event) => updateFilter("min_rating", event.target.value)}>
+                <option value="">Any</option>
+                <option value="4">4+</option>
+                <option value="4.5">4.5+</option>
+              </select>
+            </label>
+          </div>
+        </section>
+
+        {buyer?.role === "buyer" ? <UserPanel user={buyer} /> : null}
+
+        {buyer?.role === "buyer" && recommendations.length ? (
+          <DealsSection
+            title="Recommended For You"
+            items={recommendations.slice(0, 6)}
+            hint="AI-backed picks based on your browsing."
+            openProduct={openProduct}
+            wishlistIds={wishlistIds}
+            toggleWishlist={toggleWishlist}
+            onViewAll={() => setFilters((current) => ({ ...current, category: "all" }))}
+          />
+        ) : null}
+
+        {buyer?.role === "buyer" && recentlyViewed.length ? (
+          <DealsSection
+            title="Recently Viewed"
+            items={recentlyViewed.slice(0, 6)}
+            hint="Pick up where you left off."
+            openProduct={openProduct}
+            wishlistIds={wishlistIds}
+            toggleWishlist={toggleWishlist}
+            onViewAll={() => setFilters((current) => ({ ...current, category: "all" }))}
+          />
+        ) : null}
+
         {loading ? (
-          <div className="empty-state">Loading products...</div>
+          <section className="deal-section">
+            <div className="empty-state">Loading products...</div>
+          </section>
         ) : products.length ? (
-          <div className="grid">
-            {products.map((product) => (
-              <ProductCard
-                key={product.id}
-                product={product}
+          <>
+            <DealsSection
+              title={hasActiveFilters ? "Search Results" : "Deals of the Day"}
+              items={products.slice(0, 10)}
+              countdown={hasActiveFilters ? "" : countdown}
+              hint={hasActiveFilters ? "Search, price, rating, and category filters are applied." : ""}
+              openProduct={openProduct}
+              wishlistIds={wishlistIds}
+              toggleWishlist={toggleWishlist}
+              onViewAll={() => setFilters((current) => ({ ...current, category: "all" }))}
+            />
+
+            {!hasActiveFilters && sections.slice(0, 4).map((section) => (
+              <DealsSection
+                key={section.category.id}
+                title={section.category.name}
+                items={section.items}
+                hint={`Fresh ${section.category.name.toLowerCase()} picks`}
                 openProduct={openProduct}
-                wished={wishlistIds.includes(product.id)}
+                wishlistIds={wishlistIds}
                 toggleWishlist={toggleWishlist}
+                onViewAll={() => updateFilter("category", section.category.slug)}
               />
             ))}
-          </div>
+          </>
         ) : (
-          <div className="empty-state">No products matched your search.</div>
+          <section className="deal-section">
+            <div className="empty-state">No products matched your search.</div>
+          </section>
         )}
-      </section>
+      </div>
     </main>
   );
 }
@@ -573,11 +842,23 @@ function CheckoutPage({ cart, buyer, addresses, setCheckoutAddress, go, saveAddr
 function AuthPage({ login, signup, googleLogin }) {
   const [mode, setMode] = useState("login");
   const [form, setForm] = useState({ name: "", email: "aarav.buyer@example.com", phone: "9876543210", password: "password123" });
+  const [oauthRole, setOauthRole] = useState("buyer");
   const update = (key, value) => setForm((current) => ({ ...current, [key]: value }));
 
   return (
-    <main className="dashboard-page">
-      <section className="checkout-form auth-box">
+    <main className="auth-page">
+      <section className="auth-promo">
+        <span className="auth-badge">Flipkart-style storefront</span>
+        <h1>Shop smarter with a clean buyer and seller experience.</h1>
+        <p>Search fast, compare products, track orders, manage inventory, and move through checkout without friction.</p>
+        <ul className="auth-points">
+          <li>Responsive storefront with deals, carousel, and category shortcuts</li>
+          <li>Buyer, seller, and admin flows in one connected app</li>
+          <li>Google OAuth asks which side of the marketplace you belong to</li>
+        </ul>
+      </section>
+
+      <section className="checkout-form auth-box auth-card">
         <h1>{mode === "login" ? "Login" : "Signup"}</h1>
         <p className="helper-text">
           Demo buyer: <strong>aarav.buyer@example.com</strong> / <strong>password123</strong>
@@ -590,7 +871,17 @@ function AuthPage({ login, signup, googleLogin }) {
           <input required placeholder="Email" value={form.email} onChange={(event) => update("email", event.target.value)} />
           <input required type="password" placeholder="Password" value={form.password} onChange={(event) => update("password", event.target.value)} />
           <button type="submit">{mode === "login" ? "Login" : "Create Account"}</button>
-          <GoogleSignInButton googleLogin={googleLogin} />
+          <div className="oauth-role-panel">
+            <div>
+              <strong>Continue with Google</strong>
+              <p className="helper-text">Choose whether this Google sign-in should open buyer or seller access.</p>
+            </div>
+            <div className="role-toggle">
+              <button type="button" className={oauthRole === "buyer" ? "active" : ""} onClick={() => setOauthRole("buyer")}>Buyer</button>
+              <button type="button" className={oauthRole === "seller" ? "active" : ""} onClick={() => setOauthRole("seller")}>Seller</button>
+            </div>
+          </div>
+          <GoogleSignInButton googleLogin={googleLogin} selectedRole={oauthRole} />
           <button type="button" className="link-button" onClick={() => setMode(mode === "login" ? "signup" : "login")}>
             {mode === "login" ? "Create new account" : "Already have an account"}
           </button>
@@ -2115,7 +2406,7 @@ export default function App() {
       <Header query={query} setQuery={setQuery} cartCount={cartCount} currentUser={currentUser} go={go} logout={logoutUser} />
       {notice && <button className="toast" onClick={() => setNotice("")}>{notice} x</button>}
       {page === "auth" && <AuthPage login={login} signup={signup} googleLogin={googleLogin} />}
-      {page === "home" && <HomePage products={products} categories={categories} filters={filters} setFilters={setFilters} openProduct={openProduct} loading={loading} buyer={currentUser && currentUser.role !== "admin" ? currentUser : null} wishlistIds={wishlist.map((item) => item.id)} toggleWishlist={toggleWishlist} recommendations={recommendations} recentlyViewed={recentlyViewed} />}
+      {page === "home" && <HomePage query={query} products={products} categories={categories} filters={filters} setFilters={setFilters} openProduct={openProduct} loading={loading} buyer={currentUser && currentUser.role !== "admin" ? currentUser : null} wishlistIds={wishlist.map((item) => item.id)} toggleWishlist={toggleWishlist} recommendations={recommendations} recentlyViewed={recentlyViewed} />}
       {page === "detail" && <ProductDetail product={selectedProduct} onBack={() => setPage("home")} addToCart={addToCart} buyNow={buyNow} reviews={productReviews} addReview={addReview} />}
       {page === "cart" && <CartPage cart={cart} updateCart={updateCartLine} removeCart={removeCartLine} go={go} />}
       {page === "checkout" && <CheckoutPage cart={cart} buyer={currentUser} addresses={addresses} setCheckoutAddress={setCheckoutAddress} go={go} saveAddress={saveAddress} />}
@@ -2125,7 +2416,8 @@ export default function App() {
       {page === "seller" && <SellerPage dashboard={sellerDashboard} categories={categories} saveSellerProduct={saveSellerProduct} deleteSellerProduct={deleteSellerProduct} updateSellerOrderItemStatus={updateSellerOrderItemStatus} respondToReview={respondToReview} />}
       {page === "admin" && <AdminPage setNotice={setNotice} />}
       {page === "confirmation" && <ConfirmationPage order={order} go={go} />}
-      <AIChatWidget open={chatOpen} setOpen={setChatOpen} messages={chatMessages} sendMessage={sendChatMessage} clearHistory={clearChatHistory} loading={chatLoading} />
+      {page !== "auth" && page !== "admin" && <Footer />}
+      {page !== "auth" && <AIChatWidget open={chatOpen} setOpen={setChatOpen} messages={chatMessages} sendMessage={sendChatMessage} clearHistory={clearChatHistory} loading={chatLoading} />}
     </ErrorBoundary>
   );
 }

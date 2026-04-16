@@ -1078,6 +1078,7 @@ def google_oauth(payload: OAuthIn, db: Session = Depends(get_db)):
     google_user = verify_google_credential(payload.credential)
     google_sub = google_user.get("sub", "")
     email = google_user.get("email", "")
+    selected_role = payload.role if payload.role in {"buyer", "seller"} else "buyer"
     if not email:
         raise HTTPException(status_code=400, detail="Google account did not return an email")
 
@@ -1088,16 +1089,18 @@ def google_oauth(payload: OAuthIn, db: Session = Depends(get_db)):
         user = db.scalar(select(User).where(User.email == email))
 
     if not user:
+        default_name = google_user.get("name") or email.split("@")[0]
         user = User(
-            name=google_user.get("name") or email.split("@")[0],
+            name=default_name,
             email=email,
             phone="9999999999",
-            role="buyer",
+            role=selected_role,
             password_hash="",
             oauth_provider=payload.provider,
             google_sub=google_sub,
             is_active=True,
             seller_status="APPROVED",
+            store_name=default_name if selected_role == "seller" else "",
         )
         db.add(user)
         db.commit()
@@ -1106,6 +1109,14 @@ def google_oauth(payload: OAuthIn, db: Session = Depends(get_db)):
         if not user.is_active:
             raise HTTPException(status_code=403, detail="Account is inactive")
         user.oauth_provider = payload.provider
+        if user.role != "admin" and user.role != selected_role:
+            user.role = selected_role
+            if selected_role == "seller" and not user.store_name:
+                user.store_name = google_user.get("name") or user.name or email.split("@")[0]
+            if selected_role == "buyer":
+                user.store_name = ""
+            if selected_role == "seller" and user.seller_status == "SUSPENDED":
+                raise HTTPException(status_code=403, detail="Seller account is suspended")
         if google_sub and user.google_sub != google_sub:
             user.google_sub = google_sub
         if not user.name and google_user.get("name"):
