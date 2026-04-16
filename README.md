@@ -213,6 +213,31 @@ Start things in this order:
 4. Flask on `127.0.0.1:5001`
 5. Vite on `127.0.0.1:5173`
 
+## Render Backend Deploy
+
+If you deploy the backend on Render, this repo's [`render.yaml`](/c:/Users/Acer/Desktop/Flipkart/render.yaml) now does three important things for you:
+
+- pins Python to `3.11.11`
+- installs dependencies with writable Cargo temp directories
+- avoids `uvicorn[standard]`, which can pull in extra build-time native dependencies that are not needed on Render
+
+If your Render service was created manually instead of from the blueprint, copy these settings into the Render dashboard:
+
+```bash
+export CARGO_HOME=/tmp/cargo
+export RUSTUP_HOME=/tmp/rustup
+python -m pip install --upgrade pip setuptools wheel
+pip install -r requirements.txt
+```
+
+Also set:
+
+```env
+PYTHON_VERSION=3.11.11
+```
+
+If your build log shows `python3.14`, `maturin`, `cargo metadata`, or `/usr/local/cargo` read-only errors, the service is still using the wrong Python/runtime settings and needs to be redeployed after updating them.
+
 ## Useful Endpoints
 
 - Health: `http://127.0.0.1:8000/api/health`

@@ -1,4 +1,8 @@
-const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || "http://localhost:8000";
+const RAW_API_BASE_URL =
+  import.meta.env.VITE_API_URL ||
+  import.meta.env.VITE_API_BASE_URL ||
+  "http://localhost:8000";
+const API_BASE_URL = RAW_API_BASE_URL.replace(/\/+$/, "");
 const TOKEN_KEY = "flipkart_auth_token";
 export const AUTH_EXPIRED_EVENT = "flipkart-auth-expired";
 let authToken = "";

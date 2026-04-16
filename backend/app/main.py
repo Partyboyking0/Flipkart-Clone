@@ -98,11 +98,19 @@ from .schemas import (
 
 Base.metadata.create_all(bind=engine)
 
+
+def parse_cors_origins(raw_value: str | None) -> list[str]:
+    if not raw_value:
+        return ["http://localhost:5173", "http://127.0.0.1:5173"]
+    parts = [item.strip() for item in raw_value.split(",")]
+    return [item for item in parts if item]
+
+
 app = FastAPI(title="Flipkart Clone API", version="2.0.0")
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:5173", "http://127.0.0.1:5173"],
+    allow_origins=parse_cors_origins(os.getenv("CORS_ALLOW_ORIGINS")),
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -187,6 +195,26 @@ ensure_runtime_schema()
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
+def health_payload():
+    return {
+        "status": "ok",
+        "razorpay": "configured" if rzp_client else "not configured (set RAZORPAY_KEY_ID and RAZORPAY_KEY_SECRET)",
+        "email": "configured" if EMAIL_USER else "not configured (set EMAIL_USER and EMAIL_PASSWORD)",
+        "openai": "configured" if OPENAI_API_KEY else "not configured (set OPENAI_API_KEY)",
+        "google_oauth": "configured" if GOOGLE_CLIENT_ID else "not configured (set GOOGLE_CLIENT_ID)",
+    }
+
+
+@app.get("/")
+def home():
+    return {"message": "Backend running", "health": "/api/health"}
+
+
+@app.get("/health")
+def render_health():
+    return health_payload()
+
+
 def product_options():
     return selectinload(Product.category), selectinload(Product.images), selectinload(Product.specs)
 
@@ -931,13 +959,7 @@ def send_order_email(to_email: str, order_number: str, customer_name: str, total
 # ── Health ────────────────────────────────────────────────────────────────────
 @app.get("/api/health")
 def health():
-    return {
-        "status": "ok",
-        "razorpay": "configured" if rzp_client else "not configured (add keys to .env)",
-        "email": "configured" if EMAIL_USER else "not configured (add Gmail to .env)",
-        "openai": "configured" if OPENAI_API_KEY else "not configured (add OPENAI_API_KEY to .env)",
-        "google_oauth": "configured" if GOOGLE_CLIENT_ID else "not configured (add GOOGLE_CLIENT_ID to .env)",
-    }
+    return health_payload()
 
 
 @app.get("/api/ai/history", response_model=AIChatHistoryOut)
@@ -1457,7 +1479,7 @@ def add_review(payload: ReviewIn, current_user: User = Depends(require_customer_
 def razorpay_create_order(current_user: User = Depends(require_customer_user), db: Session = Depends(get_db)):
     """Create a Razorpay order for the current cart total."""
     if not rzp_client:
-        raise HTTPException(status_code=503, detail="Razorpay not configured. Add RAZORPAY_KEY_ID and RAZORPAY_KEY_SECRET to .env")
+        raise HTTPException(status_code=503, detail="Razorpay not configured. Set RAZORPAY_KEY_ID and RAZORPAY_KEY_SECRET.")
 
     items = load_cart(db, current_user.id)
     if not items:

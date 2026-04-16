@@ -199,8 +199,10 @@ function Header({ query, setQuery, cartCount, currentUser, go, logout }) {
   const isAdmin = currentUser?.role === "admin";
   const isSeller = currentUser?.role === "seller";
   const primaryLabel = currentUser ? currentUser.name.split(" ")[0] : "Login";
-  const sellerActionLabel = isAdmin ? "Admin Panel" : isSeller ? "Seller Hub" : "Become a Seller";
+  const sellerActionLabel = isAdmin ? "Admin" : "Seller";
   const moreLabel = isAdmin ? "Analytics" : currentUser?.role === "buyer" ? "Orders" : "More";
+  const locationLabel = currentUser?.city ? `${currentUser.city}, ${currentUser.state}` : "Location not set";
+  const locationAction = currentUser?.address_line ? "View saved address" : "Select delivery location";
   const openPrimary = () => go(currentUser ? (isAdmin ? "admin" : isSeller ? "seller" : "account") : "auth");
   const openSeller = () => go(isAdmin ? "admin" : "seller");
   const openMore = () => {
@@ -222,32 +224,48 @@ function Header({ query, setQuery, cartCount, currentUser, go, logout }) {
   return (
     <header className="topbar">
       <div className="topbar-inner">
-        <button className="brand" onClick={() => go("home")} aria-label="Go home">
-          <span>Flipkart</span>
-          <small>Explore <strong>Plus</strong></small>
-        </button>
+        <div className="topbar-utility">
+          <div className="topbar-utility-left">
+            <button className="brand brand-badge" onClick={() => go("home")} aria-label="Go home">
+              <span>Flipkart</span>
+              <small>Explore <strong>Plus</strong></small>
+            </button>
+            <button className="utility-pill desktop-only" type="button" onClick={() => go("home")}>Travel</button>
+          </div>
 
-        <button className="mobile-icon-button mobile-only" onClick={() => setMobileSearchOpen((value) => !value)}>
-          Search
-        </button>
+          <button className="utility-location desktop-only" type="button" onClick={() => go(currentUser ? "account" : "auth")}>
+            <strong>{locationLabel}</strong>
+            <span>{locationAction}</span>
+          </button>
+        </div>
 
-        <label className={mobileSearchOpen ? "search open" : "search"}>
-          <span className="search-icon" aria-hidden="true">Search</span>
-          <input
-            value={query}
-            onChange={(event) => setQuery(event.target.value)}
-            placeholder="Search for products, brands and more"
-          />
-        </label>
+        <div className="topbar-main">
+          <div className="topbar-center">
+            <button className="mobile-icon-button mobile-only" onClick={() => setMobileSearchOpen((value) => !value)}>
+              Search
+            </button>
 
-        <nav className="nav-actions">
-          <button className="nav-login" onClick={openPrimary}>{primaryLabel}</button>
-          <button className="nav-link desktop-only" onClick={openSeller}>{sellerActionLabel}</button>
-          <button className="nav-link desktop-only" onClick={openMore}>{moreLabel} <span className="caret">v</span></button>
-          {!isAdmin && <button className="nav-link nav-cart" onClick={() => go(currentUser ? "cart" : "auth")}>Cart <span>{cartCount}</span></button>}
-          {currentUser && !isAdmin && <button className="nav-link desktop-only" onClick={() => go("account")}>Account</button>}
-          {currentUser && <button className="nav-link desktop-only" onClick={logout}>Logout</button>}
-        </nav>
+            <label className={mobileSearchOpen ? "search open" : "search"}>
+              <span className="search-icon" aria-hidden="true">Search</span>
+              <input
+                value={query}
+                onChange={(event) => setQuery(event.target.value)}
+                placeholder="Search for products, brands and more"
+              />
+            </label>
+          </div>
+
+          <div className="topbar-right">
+            <nav className="nav-actions">
+              <button className="nav-login" onClick={openPrimary}>{primaryLabel}</button>
+              <button className="nav-link desktop-only" onClick={openSeller}>{sellerActionLabel}</button>
+              <button className="nav-link" onClick={openMore}>{moreLabel} <span className="caret">v</span></button>
+              {!isAdmin && <button className="nav-link nav-cart" onClick={() => go(currentUser ? "cart" : "auth")}>Cart <span>{cartCount}</span></button>}
+              {currentUser && !isAdmin && <button className="nav-link desktop-only" onClick={() => go("account")}>Account</button>}
+              {currentUser && <button className="nav-link desktop-only" onClick={logout}>Logout</button>}
+            </nav>
+          </div>
+        </div>
       </div>
     </header>
   );
@@ -348,10 +366,11 @@ function DealCard({ product, openProduct, wished, toggleWishlist }) {
 }
 
 function CategoryStrip({ categories, products, activeCategory, selectCategory }) {
-  const items = categories.slice(0, 8).map((category, index) => {
+  const allPreview = products[0]?.images?.[0]?.url || heroBanners[0].image;
+  const items = [{ id: "all", name: "For You", slug: "all", preview: allPreview }].concat(categories.slice(0, 7).map((category, index) => {
     const preview = products.find((product) => product.category.slug === category.slug)?.images?.[0]?.url || heroBanners[index % heroBanners.length].image;
     return { ...category, preview };
-  });
+  }));
 
   return (
     <section className="category-strip">
